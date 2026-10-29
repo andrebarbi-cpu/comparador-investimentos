@@ -3,6 +3,7 @@ _brutos/
 # o banco vai como anexo de release, não no histórico do git
 dados/*.db
 dados/*.db-*
+dados/*.gz
 node_modules/
 # gerado a cada atualização (publicado pelo GitHub Actions)
 site/dados.js
