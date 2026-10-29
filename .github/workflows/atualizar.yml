@@ -1,0 +1,86 @@
+# Atualiza os dados todo dia útil e publica a página no GitHub Pages.
+# O banco SQLite fica guardado como anexo da release "banco" (fora do histórico do git).
+name: Atualizar dados
+
+on:
+  schedule:
+    - cron: '30 0 * * 2-6'   # 21h30 de Brasília, depois do arquivo de cotações da B3 (~20h30)
+    - cron: '0 11 * * 1-5'   # 8h de Brasília: pega balanços entregues de madrugada e arquivo atrasado
+  workflow_dispatch:
+    inputs:
+      carga_inicial:
+        description: 'Refazer a carga completa desde 2016 (demora uns 10 minutos)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # anexar o banco à release
+  pages: write
+  id-token: write
+
+concurrency:
+  group: atualizar
+  cancel-in-progress: false
+
+jobs:
+  atualizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: github-pages
+      url: ${{ steps.publicar.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Testar acesso às fontes
+        run: |
+          for url in \
+            https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A2026.ZIP \
+            https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv \
+            "https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/1?formato=json"; do
+            echo "$(curl -s -o /dev/null -I -m 30 -w '%{http_code}' "$url") $url"
+          done
+
+      - name: Baixar o banco atual
+        if: ${{ !inputs.carga_inicial }}
+        run: |
+          mkdir -p dados
+          if gh release download banco --pattern comparador.db.gz --dir dados; then
+            gunzip -f dados/comparador.db.gz
+          else
+            echo "Banco não encontrado; será feita a carga inicial"
+          fi
+
+      - name: Atualizar
+        id: atualizar
+        run: |
+          if [ -f dados/comparador.db ]; then npm run atualizar; else npm run carga-inicial; fi \
+            || echo "falhou=1" >> "$GITHUB_OUTPUT"
+
+      - name: Guardar o banco
+        run: |
+          gzip -kf dados/comparador.db
+          gh release view banco >/dev/null 2>&1 \
+            || gh release create banco --title "Banco de dados" --notes "Banco SQLite atualizado automaticamente. Não apagar."
+          gh release upload banco dados/comparador.db.gz --clobber
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: publicar
+        uses: actions/deploy-pages@v4
+
+      # Alguma fonte falhou: os dados que deram certo já foram salvos e publicados,
+      # mas a execução fica vermelha para o GitHub avisar por e-mail
+      - name: Avisar falha parcial
+        if: steps.atualizar.outputs.falhou == '1'
+        run: |
+          echo "::error::Uma ou mais fontes falharam. Veja o passo Atualizar."
+          exit 1

@@ -1,0 +1,18 @@
+{
+  "name": "comparador-investimentos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Coleta e guarda histórico de ações da B3 e ETFs para achar oportunidades",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "carga-inicial": "node --disable-warning=ExperimentalWarning src/atualizar.js --carga-inicial",
+    "atualizar": "node --disable-warning=ExperimentalWarning src/atualizar.js",
+    "resumo": "node --disable-warning=ExperimentalWarning src/resumo.js",
+    "calcular": "node --disable-warning=ExperimentalWarning src/calcular.js",
+    "exportar": "node --disable-warning=ExperimentalWarning src/exportar.js",
+    "ver": "node src/servir.js"
+  }
+}

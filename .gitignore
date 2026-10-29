@@ -1,0 +1,10 @@
+# arquivos baixados das fontes (recriados a cada carga)
+_brutos/
+# o banco vai como anexo de release, não no histórico do git
+dados/*.db
+dados/*.db-*
+node_modules/
+# gerado a cada atualização (publicado pelo GitHub Actions)
+site/dados.js
+# configuração local do Claude Code
+.claude/

@@ -1,0 +1,53 @@
+// Ponto de entrada da coleta.
+//   npm run carga-inicial   -> baixa todo o histórico desde ANO_INICIO (demora, roda uma vez)
+//   npm run atualizar       -> rotina diária: só o que mudou desde a última execução
+import { abrirDb } from './db.js';
+import { atualizarCadastro, atualizarDemonstracoes } from './cvm.js';
+import { carregarAno, atualizarDiario } from './b3.js';
+import { atualizarBcb, atualizarTesouro } from './macro.js';
+import { calcular } from './calcular.js';
+import { exportar } from './exportar.js';
+import { log, anoAtual } from './util.js';
+
+const ANO_INICIO = 2016;
+const cargaInicial = process.argv.includes('--carga-inicial');
+const ano = anoAtual();
+const db = abrirDb();
+const inicio = new Date().toISOString();
+const falhas = [];
+
+// Cada etapa roda isolada: se uma fonte estiver fora do ar, as outras seguem
+async function etapa(nome, fn) {
+  try { await fn(); }
+  catch (e) { falhas.push(`${nome}: ${e.message}`); log(`ERRO em ${nome}:`, e.message); }
+}
+
+log(cargaInicial ? `Carga inicial desde ${ANO_INICIO}` : 'Atualização diária');
+
+await etapa('cadastro', () => atualizarCadastro(db, ano));
+
+if (cargaInicial) {
+  // DFP do ano anterior ao início é necessária para calcular os 12 meses do 1º trimestre
+  for (let a = ANO_INICIO - 1; a <= ano; a++) await etapa(`DFP ${a}`, () => atualizarDemonstracoes(db, 'DFP', a));
+  for (let a = ANO_INICIO; a <= ano; a++) await etapa(`ITR ${a}`, () => atualizarDemonstracoes(db, 'ITR', a));
+  for (let a = ANO_INICIO; a <= ano; a++) await etapa(`cotações ${a}`, () => carregarAno(db, a, { forcar: a === ano }));
+} else {
+  // Empresas reapresentam balanços antigos, então olhamos o ano corrente e o anterior
+  for (const a of [ano - 1, ano]) {
+    await etapa(`DFP ${a}`, () => atualizarDemonstracoes(db, 'DFP', a, { soSeMudou: true }));
+    await etapa(`ITR ${a}`, () => atualizarDemonstracoes(db, 'ITR', a, { soSeMudou: true }));
+  }
+  await etapa('cotações', () => atualizarDiario(db));
+}
+await etapa('Banco Central', () => atualizarBcb(db, ANO_INICIO));
+await etapa('Tesouro', () => atualizarTesouro(db, ANO_INICIO));
+// Recalcula indicadores e notas com o que foi coletado (mesmo que alguma fonte tenha falhado)
+await etapa('cálculo', () => calcular(db));
+await etapa('exportação', () => exportar(db));
+
+db.prepare('INSERT INTO execucoes (inicio, fim, modo, resultado) VALUES (?, ?, ?, ?)')
+  .run(inicio, new Date().toISOString(), cargaInicial ? 'carga-inicial' : 'diaria', falhas.length ? falhas.join(' | ') : 'ok');
+db.close();
+
+if (falhas.length) { log(`Terminou com ${falhas.length} falha(s)`); process.exit(1); }
+log('Concluído');

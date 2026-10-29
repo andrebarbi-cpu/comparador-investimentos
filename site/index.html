@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Comparador de Investimentos</title>
+  <meta name="description" content="Ações da B3 e ETFs: indicadores, histórico e oportunidades, atualizado todo dia.">
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+  <header class="topo">
+    <div class="topo-linha">
+      <h1>Comparador de Investimentos</h1>
+      <p class="atualizado" id="atualizado"></p>
+    </div>
+    <div class="contexto" id="contexto"></div>
+    <nav class="abas" id="abas" aria-label="Seções">
+      <a href="#oportunidades" data-aba="oportunidades">Oportunidades</a>
+      <a href="#ranking" data-aba="ranking">Ranking</a>
+      <a href="#comparar" data-aba="comparar">Comparar</a>
+      <a href="#etfs" data-aba="etfs">ETFs e renda fixa</a>
+      <a href="#metodo" data-aba="metodo">Como funciona</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="aba-oportunidades" class="aba"></section>
+    <section id="aba-ranking" class="aba"></section>
+    <section id="aba-comparar" class="aba"></section>
+    <section id="aba-etfs" class="aba"></section>
+    <section id="aba-metodo" class="aba"></section>
+  </main>
+
+  <div class="ficha-fundo" id="ficha-fundo" hidden>
+    <article class="ficha" id="ficha" role="dialog" aria-modal="true" aria-labelledby="ficha-titulo"></article>
+  </div>
+  <div class="dica" id="dica" role="tooltip" hidden></div>
+
+  <footer class="rodape">
+    Dados públicos da CVM, B3, Banco Central e Tesouro Nacional. A ferramenta aponta candidatas para
+    estudo, não recomenda compra nem venda.
+  </footer>
+
+  <script src="dados.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
