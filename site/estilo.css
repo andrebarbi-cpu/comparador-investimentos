@@ -183,6 +183,8 @@ tbody tr:hover { background: var(--superficie-2); }
 td.empresa { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 td.empresa .nome { display: block; font-size: .78rem; overflow: hidden; text-overflow: ellipsis; }
 td .selos { flex-wrap: nowrap; }
+input.qtd { width: 84px; text-align: right; }
+td .campo { min-height: 30px; padding: 4px 8px; }
 .vazio { color: var(--texto-3); }
 .positivo { color: var(--texto-bom); }
 .negativo { color: var(--texto-ruim); }

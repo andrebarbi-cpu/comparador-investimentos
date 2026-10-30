@@ -1,6 +1,6 @@
 // Etapa 3: exporta o que a página precisa para site/dados.js (window.DADOS = {...}).
 // Um .js em vez de .json para a página abrir direto do disco, sem servidor.
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { abrirDb } from './db.js';
@@ -46,17 +46,35 @@ export function exportar(db) {
   series.CDI = [...cdiMensal].map(([mes, v]) => [mes, Number(v.toFixed(6))]);
 
   const ultimo = serie => db.prepare('SELECT data, valor FROM macro WHERE serie = ? ORDER BY data DESC LIMIT 1').get(serie);
-  const tesouro = db.prepare(`SELECT titulo, vencimento, taxa FROM tesouro WHERE data = (SELECT max(data) FROM tesouro)
+  const tesouro = db.prepare(`SELECT titulo, vencimento, taxa, pu FROM tesouro WHERE data = (SELECT max(data) FROM tesouro)
     ORDER BY titulo, vencimento`).all();
   const macro = {
     selic: ultimo('selic_meta'), ipca_12m: ultimo('ipca_12m'), dolar: ultimo('dolar'),
     cdi_dia: ultimo('cdi'), tesouro_data: db.prepare('SELECT max(data) d FROM tesouro').get().d,
   };
 
+  // Carteiras acompanhadas: cotações diárias dos últimos ~400 dias, histórico dos títulos do
+  // Tesouro e o CDI diário (para calcular CDBs a partir da data de aplicação)
+  const config = JSON.parse(readFileSync(join(RAIZ, 'config', 'carteiras.json'), 'utf8'));
+  const acompanhados = [...new Set(config.carteiras.flatMap(c => [...(c.acoes ?? []), ...(c.etfs ?? [])]))];
+  const desde = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
+  const precos = {};
+  for (const tk of acompanhados) {
+    precos[tk] = db.prepare('SELECT data, fechamento FROM cotacoes WHERE ticker = ? AND data >= ? ORDER BY data')
+      .all(tk, desde).map(r => [r.data, r.fechamento]);
+  }
+  const tesouroSeries = {};
+  for (const t of config.carteiras.flatMap(c => c.tesouro ?? [])) {
+    tesouroSeries[`${t.titulo}|${t.vencimento}`] = db.prepare(`SELECT data, taxa, pu FROM tesouro
+      WHERE titulo = ? AND vencimento = ? ORDER BY data`).all(t.titulo, t.vencimento).map(r => [r.data, r.taxa, r.pu]);
+  }
+  const cdiDiario = db.prepare("SELECT data, valor FROM macro WHERE serie = 'cdi' ORDER BY data").all().map(r => [r.data, r.valor]);
+
   const dados = {
     gerado_em: new Date().toISOString(),
     data_precos: empresas[0]?.data ?? null,
     macro, tesouro, empresas, historico, anuais, etfs, series,
+    config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario,
   };
   mkdirSync(join(RAIZ, 'site'), { recursive: true });
   const texto = `window.DADOS = ${JSON.stringify(dados)};\n`;

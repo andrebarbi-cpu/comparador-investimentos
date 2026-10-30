@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS tesouro (
   vencimento TEXT,
   data TEXT,
   taxa REAL,            -- taxa de compra, % a.a.
+  pu REAL,              -- preço unitário base (quanto vale um título hoje)
   PRIMARY KEY (titulo, vencimento, data)
 ) WITHOUT ROWID;
 
@@ -97,6 +98,8 @@ export function abrirDb() {
   // Colunas acrescentadas depois da primeira versão do banco
   const colunas = db.prepare('PRAGMA table_info(fundamentos)').all().map(c => c.name);
   if (!colunas.includes('equivalencia')) db.exec('ALTER TABLE fundamentos ADD COLUMN equivalencia REAL');
+  const colTesouro = db.prepare('PRAGMA table_info(tesouro)').all().map(c => c.name);
+  if (!colTesouro.includes('pu')) db.exec('ALTER TABLE tesouro ADD COLUMN pu REAL');
   return db;
 }
 

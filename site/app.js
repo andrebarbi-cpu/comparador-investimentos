@@ -25,6 +25,7 @@ const ICONE_ALERTA = '<svg class="icone-alerta" viewBox="0 0 20 20" aria-hidden=
 const listaAlertas = texto => texto ? `<ul class="alertas">${texto.split(' | ').map(a => `<li>${ICONE_ALERTA}<span>${esc(a)}</span></li>`).join('')}</ul>` : '';
 const selos = e => {
   const s = [];
+  if (naCarteira.has(e.cnpj)) s.push('Na carteira');
   if (e.oportunidade) s.push('Oportunidade');
   if (e.selo_graham) s.push('Graham');
   if (e.selo_bazin) s.push('Bazin');
@@ -57,13 +58,14 @@ function montarTopo() {
 }
 
 // ---------- Navegação ----------
-const ABAS = { oportunidades: montarOportunidades, ranking: montarRanking, comparar: montarComparar, etfs: montarEtfs, metodo: montarMetodo };
+const ABAS = { oportunidades: montarOportunidades, carteiras: montarCarteiras, ranking: montarRanking, comparar: montarComparar, etfs: montarEtfs, metodo: montarMetodo };
 const montadas = new Set();
 let abaAtual = null;
 
 function rota() {
   const h = decodeURIComponent(location.hash.slice(1)) || 'oportunidades';
   const [nome, arg] = h.split('/');
+  if (nome === 'importar') { importar(arg); return; }
   if (nome === 'empresa') {
     if (!abaAtual) mostrarAba('oportunidades');
     abrirFicha(arg);
@@ -86,7 +88,14 @@ const irPara = h => { location.hash = h; };
 
 // ---------- Oportunidades ----------
 function montarOportunidades(el) {
-  const lista = D.empresas.filter(e => e.oportunidade).sort((a, b) => b.nota_oportunidade - a.nota_oportunidade);
+  // Fora da carteira e sem setores voláteis (varejo), salvo nota excepcional
+  const regra = D.config?.oportunidades ?? {};
+  const evitar = new Set(regra.setores_evitar ?? []), excecao = regra.nota_minima_excecao ?? 101;
+  const todas = D.empresas.filter(e => e.oportunidade).sort((a, b) => b.nota_oportunidade - a.nota_oportunidade);
+  const daCarteira = todas.filter(e => naCarteira.has(e.cnpj));
+  const ocultas = todas.filter(e => !naCarteira.has(e.cnpj) && evitar.has(e.setor) && e.nota_oportunidade < excecao);
+  const lista = todas.filter(e => !naCarteira.has(e.cnpj) && !ocultas.includes(e));
+  const linkTk = e => `<a href="#empresa/${esc(e.ticker)}">${esc(e.ticker)}</a>`;
   const b = etf.BOVA11;
   const queda = b && b.distancia_maxima_52s < -0.1;
   el.innerHTML = `
@@ -98,7 +107,9 @@ function montarOportunidades(el) {
       ${pct(-b.distancia_maxima_52s, 0)} abaixo do pico das últimas 52 semanas (${pctSinal(b.ret_1m)} no último mês).
       Os múltiplos usam o lucro dos últimos 12 meses, de antes da queda. Parte do “desconto” pode ser o mercado
       antecipando lucros menores, e não uma pechincha. Confira o motivo da queda antes de decidir.</div></div>` : ''}
-    <p class="contagem" style="margin:0 0 10px">${lista.length} empresas atendem aos critérios hoje.</p>
+    <p class="contagem" style="margin:0 0 10px">${lista.length} oportunidades fora da carteira.
+      ${daCarteira.length ? `Da carteira, ${daCarteira.map(linkTk).join(', ')} também aparece${daCarteira.length > 1 ? 'm' : ''} como oportunidade (veja a aba Carteiras).` : ''}
+      ${ocultas.length ? `${ocultas.length} de varejo ficaram de fora por terem nota abaixo de ${excecao}: ${ocultas.map(linkTk).join(', ')}.` : ''}</p>
     <div class="cartoes">${lista.map(cartaoOportunidade).join('') || '<p class="vazio">Nenhuma empresa atende aos critérios hoje.</p>'}</div>`;
   for (const c of el.querySelectorAll('.cartao')) c.addEventListener('click', () => irPara(`empresa/${c.dataset.ticker}`));
   for (const s of el.querySelectorAll('.spark')) desenharSpark(s, porTicker.get(s.dataset.ticker));
@@ -113,7 +124,7 @@ function cartaoOportunidade(e) {
     <p class="motivo">${esc(e.motivo)}</p>
     <div class="mini"><span>Qualidade <b>${e.nota_qualidade ?? '–'}</b></span>${e.financeira ? '' : `<span>Saúde <b>${e.nota_saude ?? '–'}</b></span>`}
       <span>Dividendos <b>${pct(e.dy)}</b></span><span>Liquidez <b>${dinheiro(e.liquidez)}/dia</b></span></div>
-    ${selos(e)}
+    ${selos(e)}${(D.config?.oportunidades?.setores_evitar ?? []).includes(e.setor) ? '<span class="selos"><span class="selo">Varejo · nota excepcional</span></span>' : ''}
     ${listaAlertas(e.alertas)}
   </button>`;
 }
@@ -132,6 +143,276 @@ function desenharSpark(svg, e) {
     <path d="${d}" fill="none" stroke="var(--serie-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
     ${ok(h[ult]) ? `<line x1="${x(ult)}" x2="${x(ult)}" y1="${y(h[ult])}" y2="${y(h[ult])}" stroke="var(--serie-1)" stroke-width="8" stroke-linecap="round" vector-effect="non-scaling-stroke"/>` : ''}`;
   svg.setAttribute('aria-label', `P/L desde 2020; linha cinza é a mediana (${num(e.pl_mediana)})`);
+}
+
+// ---------- Carteiras ----------
+// A lista de ativos vem de config/carteiras.json (pública). Quantidades e CDBs ficam só no
+// navegador de cada um (localStorage); o link de importação leva os dados no "#", que não vai ao servidor.
+const CHAVE_LOCAL = 'comparador.carteiras.v1';
+function lerLocal() {
+  try {
+    const s = JSON.parse(localStorage.getItem(CHAVE_LOCAL));
+    if (s && typeof s === 'object') return { qtd: s.qtd ?? {}, cdbs: s.cdbs ?? [] };
+  } catch { /* sem acesso ao armazenamento: segue sem quantidades */ }
+  return { qtd: {}, cdbs: [] };
+}
+let local = lerLocal();
+let localSalvo = true;
+function salvarLocal() {
+  try { localStorage.setItem(CHAVE_LOCAL, JSON.stringify(local)); localSalvo = true; }
+  catch { localSalvo = false; }
+}
+const paraBase64 = obj => btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(obj))))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const deBase64 = s => JSON.parse(new TextDecoder().decode(
+  Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0))));
+let avisoImportacao = '';
+function importar(codigo) {
+  try {
+    const d = deBase64(codigo);
+    Object.assign(local.qtd, d.qtd ?? {});
+    if (Array.isArray(d.cdbs) && d.cdbs.length) local.cdbs = d.cdbs;
+    salvarLocal();
+    avisoImportacao = localSalvo ? 'Quantidades importadas e salvas neste aparelho.'
+      : 'Quantidades importadas, mas este navegador não deixa salvar: elas somem ao fechar a página.';
+  } catch { avisoImportacao = 'O link de importação está incompleto ou corrompido.'; }
+  montadas.delete('carteiras');
+  history.replaceState(null, '', '#carteiras');
+  rota();
+}
+
+const CARTEIRAS = D.config?.carteiras ?? [];
+const naCarteira = new Set(CARTEIRAS.flatMap(c => (c.acoes ?? []).map(t => porTicker.get(t)?.cnpj)).filter(Boolean));
+const serie = tk => D.precos?.[tk] ?? [];
+const precoAtual = tk => serie(tk).at(-1)?.[1] ?? null;
+function variacao(tk, dias) {
+  const s = serie(tk);
+  if (s.length < 2) return null;
+  if (dias === 1) return s.at(-1)[1] / s.at(-2)[1] - 1;
+  const alvo = new Date(Date.parse(s.at(-1)[0]) - dias * 86400000).toISOString().slice(0, 10);
+  const ant = s.findLast(p => p[0] <= alvo);
+  return ant ? s.at(-1)[1] / ant[1] - 1 : null;
+}
+const campoQtd = (chave, passo = 1) => `<input class="campo qtd" type="number" min="0" step="${passo}" inputmode="decimal"
+  data-chave="${esc(chave)}" value="${local.qtd[chave] ?? ''}" placeholder="0" aria-label="Quantidade de ${esc(chave)}">`;
+const situacao = e => {
+  const s = [];
+  if (e?.oportunidade) s.push('<span class="selo">Oportunidade</span>');
+  if (ok(e?.pl_percentil)) s.push(e.pl_percentil <= 25 ? '<span class="selo">↓ Barata vs. histórico</span>'
+    : e.pl_percentil >= 75 ? '<span class="selo">↑ Cara vs. histórico</span>' : '<span class="selo">No padrão</span>');
+  if (e?.alertas) {
+    const n = e.alertas.split(' | ').length;
+    s.push(`<span class="selo" title="${esc(e.alertas)}">⚠ ${n} alerta${n > 1 ? 's' : ''}</span>`);
+  }
+  return `<span class="selos">${s.join('')}</span>`;
+};
+
+function montarCarteiras(el) {
+  el.innerHTML = `
+    <h2>Carteiras</h2>
+    <p class="intro">Acompanhamento dos ativos de vocês. As quantidades ficam salvas só neste aparelho e nunca vão para o
+      site. Para levar para outro celular, use “Gerar link com minhas quantidades” no fim da página.</p>
+    ${avisoImportacao ? `<div class="aviso" style="border-left-color:var(--destaque)"><div>${esc(avisoImportacao)}</div></div>` : ''}
+    <div id="cart-corpo"></div>
+    <div class="grafico-bloco" style="margin-top:20px">
+      <h3>Levar as quantidades para outro aparelho</h3>
+      <p class="tile-sub">O link carrega as quantidades e os CDBs deste aparelho. Quem abrir grava esses números no próprio
+        navegador. Mande só para quem você quiser.</p>
+      <div class="filtros"><button class="botao" id="cart-link">Gerar link com minhas quantidades</button>
+        <input class="campo" id="cart-link-txt" readonly style="flex:1;min-width:200px" aria-label="Link gerado" hidden></div>
+    </div>`;
+  avisoImportacao = '';
+  desenharCarteiras();
+  $('#cart-link').addEventListener('click', async () => {
+    const url = `${location.origin}${location.pathname}#importar/${paraBase64({ qtd: local.qtd, cdbs: local.cdbs })}`;
+    const txt = $('#cart-link-txt');
+    txt.hidden = false;
+    txt.value = url;
+    txt.select();
+    try { await navigator.clipboard.writeText(url); $('#cart-link').textContent = 'Link copiado'; }
+    catch { /* fica o campo para copiar à mão */ }
+  });
+}
+
+function desenharCarteiras() {
+  const corpo = $('#cart-corpo');
+  corpo.innerHTML = CARTEIRAS.map(c => `<section class="carteira" data-id="${esc(c.id)}">
+      <h2 style="margin:20px 0 8px">${esc(c.nome)}</h2>
+      <div class="blocos" id="resumo-${esc(c.id)}"></div>
+      ${c.acoes?.length ? blocoAcoes(c) : ''}
+      ${c.etfs?.length ? blocoEtfs(c) : ''}
+      ${c.tesouro?.length ? blocoTesouro(c) : ''}
+      ${c.cdb ? blocoCdb() : ''}
+    </section>`).join('');
+  for (const c of CARTEIRAS) resumoCarteira(c);
+  for (const i of corpo.querySelectorAll('input.qtd')) i.addEventListener('change', () => {
+    const v = Number(i.value);
+    if (v > 0) local.qtd[i.dataset.chave] = v; else delete local.qtd[i.dataset.chave];
+    salvarLocal();
+    desenharCarteiras();
+  });
+  for (const tr of corpo.querySelectorAll('tr[data-ticker]')) tr.addEventListener('click', ev => {
+    if (!ev.target.closest('input')) irPara(`empresa/${tr.dataset.ticker}`);
+  });
+  ligarCdbs();
+  for (const c of CARTEIRAS) for (const t of c.tesouro ?? []) graficoTesouro(t);
+}
+
+// Valor, renda estimada e peso de cada ação da carteira
+function linhasAcoes(c) {
+  return c.acoes.map(tk => {
+    const e = porTicker.get(tk), p = precoAtual(tk) ?? e?.preco, q = local.qtd[tk] ?? 0;
+    return { tk, e, p, q, saldo: q * (p ?? 0), renda: q * (p ?? 0) * (e?.dy ?? 0) };
+  });
+}
+function blocoAcoes(c) {
+  const linhas = linhasAcoes(c);
+  const total = linhas.reduce((s, l) => s + l.saldo, 0);
+  return `<div class="tabela-caixa" style="max-height:none"><table>
+    <thead><tr><th class="esq">Ação</th><th>Qtd.</th><th>Preço</th><th>Dia</th><th>12 meses</th><th>Saldo</th><th>Peso</th>
+      <th title="Dividendos e JCP pagos nos últimos 12 meses sobre o preço">Div. 12m</th>
+      <th title="Quantidade × preço × dividendos dos últimos 12 meses">Renda/ano</th>
+      <th title="P/L de hoje × mediana desde 2020">P/L × mediana</th><th>Nota</th><th class="esq">Situação</th></tr></thead>
+    <tbody>${linhas.map(({ tk, e, p, q, saldo, renda }) => `<tr data-ticker="${esc(tk)}">
+      <td class="esq empresa"><b>${esc(tk)}</b><span class="nome">${esc(e?.nome ?? '')}</span></td>
+      <td>${campoQtd(tk)}</td><td>R$ ${num(p, 2)}</td>
+      <td class="${classeSinal(variacao(tk, 1))}">${pctSinal(variacao(tk, 1))}</td>
+      <td class="${classeSinal(variacao(tk, 365))}">${pctSinal(variacao(tk, 365))}</td>
+      <td>${q ? dinheiro(saldo) : '–'}</td><td>${q && total ? pct(saldo / total, 0) : '–'}</td>
+      <td>${pct(e?.dy)}</td><td>${q ? dinheiro(renda) : '–'}</td>
+      <td>${ok(e?.pl) && ok(e?.pl_mediana) ? `${num(e.pl)} <span class="setor">× ${num(e.pl_mediana)}</span>` : '–'}</td>
+      <td>${medidor(e?.nota_geral)}</td><td class="esq">${situacao(e)}</td></tr>`).join('')}</tbody>
+  </table></div>
+  ${alertasCarteira(linhas)}`;
+}
+function alertasCarteira(linhas) {
+  const com = linhas.filter(l => l.e?.alertas);
+  if (!com.length) return '';
+  return `<div class="aviso" style="margin-top:12px">${ICONE_ALERTA}<div><strong>Alertas da carteira</strong>
+    <ul class="alertas">${com.flatMap(l => l.e.alertas.split(' | ')
+      .map(a => `<li><span><b>${esc(l.tk)}:</b> ${esc(a)}</span></li>`)).join('')}</ul></div></div>`;
+}
+function blocoEtfs(c) {
+  return `<div class="tabela-caixa" style="max-height:none;margin-top:12px"><table>
+    <thead><tr><th class="esq">ETF</th><th>Qtd.</th><th>Preço</th><th>Dia</th><th>1 mês</th><th>12 meses</th>
+      <th>CDI 12m</th><th>Do pico 52s</th><th>Saldo</th></tr></thead>
+    <tbody>${c.etfs.map(tk => {
+      const e = etf[tk], q = local.qtd[tk] ?? 0, p = precoAtual(tk) ?? e?.preco;
+      return `<tr style="cursor:default"><td class="esq"><b>${esc(tk)}</b></td><td>${campoQtd(tk)}</td><td>R$ ${num(p, 2)}</td>
+        <td class="${classeSinal(variacao(tk, 1))}">${pctSinal(variacao(tk, 1))}</td>
+        <td class="${classeSinal(variacao(tk, 30))}">${pctSinal(variacao(tk, 30))}</td>
+        <td class="${classeSinal(variacao(tk, 365))}">${pctSinal(variacao(tk, 365))}</td>
+        <td>${pct(e?.cdi_12m)}</td><td>${pct(e?.distancia_maxima_52s)}</td><td>${q ? dinheiro(q * p) : '–'}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
+}
+
+const chaveTesouro = t => `${t.titulo}|${t.vencimento}`;
+function infoTesouro(t) {
+  const s = D.tesouro_series?.[chaveTesouro(t)] ?? [];
+  const ult = s.at(-1);
+  const em = dias => {
+    const alvo = new Date(Date.parse(ult[0]) - dias * 86400000).toISOString().slice(0, 10);
+    return s.findLast(p => p[0] <= alvo);
+  };
+  const taxas = s.map(p => p[1]).filter(ok);
+  return {
+    s, ult, taxa: ult?.[1], pu: ult?.[2],
+    pu1m: ult && em(30) ? ult[2] / em(30)[2] - 1 : null,
+    pu12m: ult && em(365) ? ult[2] / em(365)[2] - 1 : null,
+    pctTaxa: taxas.length > 20 ? 100 * taxas.filter(x => x < ult[1]).length / taxas.length : null,
+  };
+}
+function blocoTesouro(c) {
+  return c.tesouro.map(t => {
+    const i = infoTesouro(t), ch = `TD:${chaveTesouro(t)}`, q = local.qtd[ch] ?? 0;
+    if (!i.ult) return `<p class="vazio">Sem dados para ${esc(t.titulo)} ${esc(t.vencimento)}.</p>`;
+    return `<div class="tabela-caixa" style="max-height:none;margin-top:12px"><table>
+      <thead><tr><th class="esq">Título</th><th>Qtd. (títulos)</th><th>Taxa hoje</th><th>Preço do título</th>
+        <th>1 mês</th><th>12 meses</th><th>Saldo</th></tr></thead>
+      <tbody><tr style="cursor:default">
+        <td class="esq"><b>${esc(t.titulo)} ${t.vencimento.slice(0, 4)}</b><span class="nome" style="display:block">vence em ${data(t.vencimento)}</span></td>
+        <td>${campoQtd(ch, 0.01)}</td><td>IPCA + ${num(i.taxa, 2)}%</td><td>R$ ${num(i.pu, 2)}</td>
+        <td class="${classeSinal(i.pu1m)}">${pctSinal(i.pu1m)}</td><td class="${classeSinal(i.pu12m)}">${pctSinal(i.pu12m)}</td>
+        <td>${q ? dinheiro(q * i.pu) : '–'}</td></tr></tbody></table></div>
+      <div class="grafico-bloco" style="margin-top:12px"><h3>Taxa do ${esc(t.titulo)} ${t.vencimento.slice(0, 4)}</h3>
+        <div class="tile-sub">${ok(i.pctTaxa) ? `Hoje a taxa está acima de ${num(i.pctTaxa, 0)}% dos dias desde ${data(i.s[0][0])}. ` : ''}
+          Taxa alta = título barato: bom momento para comprar mais. Para quem já tem, o saldo cai quando a taxa sobe
+          e sobe quando ela cai; levando até o vencimento, recebe a taxa contratada.</div>
+        <div class="grafico" id="g-td-${esc(t.vencimento)}"></div></div>`;
+  }).join('');
+}
+function graficoTesouro(t) {
+  const el = document.getElementById(`g-td-${t.vencimento}`);
+  if (!el) return;
+  const porMes = new Map();
+  for (const [d, taxa] of infoTesouro(t).s) if (ok(taxa)) porMes.set(d.slice(0, 7), taxa);
+  const pontos = [...porMes];
+  const mediaTaxa = pontos.reduce((s, p) => s + p[1], 0) / pontos.length;
+  graficoLinhas(el, {
+    series: [{ nome: 'Taxa (IPCA +)', cor: 'var(--serie-1)', pontos }], fmt: v => `${num(v, 2)}%`,
+    fmtEixo: v => `${num(v, 1)}%`, ref: { y: mediaTaxa, rotulo: `média ${num(mediaTaxa, 2)}%` },
+  });
+}
+
+// CDB: rende um percentual do CDI a partir da data de aplicação; IR pela tabela regressiva
+function calcularCdb(cdb) {
+  const pctCdi = (Number(cdb.pct) || 100) / 100;
+  let fator = 1;
+  for (const [d, taxa] of D.cdi_diario ?? []) if (d > cdb.data) fator *= 1 + taxa / 100 * pctCdi;
+  const aplicado = Number(cdb.valor) || 0;
+  const bruto = aplicado * fator;
+  const dias = (Date.parse(D.data_precos) - Date.parse(cdb.data)) / 86400000;
+  const aliquota = dias <= 180 ? 0.225 : dias <= 360 ? 0.2 : dias <= 720 ? 0.175 : 0.15;
+  return { bruto, rend: fator - 1, aliquota, liquido: bruto - Math.max(0, bruto - aplicado) * aliquota };
+}
+function blocoCdb() {
+  const linhas = local.cdbs.map((c, i) => {
+    const r = c.valor && c.data ? calcularCdb(c) : null;
+    return `<tr style="cursor:default" data-cdb="${i}">
+      <td class="esq"><input class="campo" data-campo="nome" value="${esc(c.nome ?? '')}" placeholder="Banco" style="width:120px" aria-label="Banco"></td>
+      <td><input class="campo" data-campo="valor" type="number" min="0" step="0.01" value="${c.valor ?? ''}" placeholder="R$" style="width:110px" aria-label="Valor aplicado"></td>
+      <td><input class="campo" data-campo="data" type="date" value="${esc(c.data ?? '')}" aria-label="Data da aplicação"></td>
+      <td><input class="campo" data-campo="pct" type="number" min="0" step="1" value="${c.pct ?? 100}" style="width:80px" aria-label="Percentual do CDI"></td>
+      <td>${r ? dinheiro(r.bruto) : '–'}</td><td>${r ? pctSinal(r.rend) : '–'}</td>
+      <td>${r ? pct(r.aliquota, 1) : '–'}</td><td>${r ? dinheiro(r.liquido) : '–'}</td>
+      <td><button class="botao" data-remover="${i}" aria-label="Remover CDB">×</button></td></tr>`;
+  }).join('');
+  return `<div class="grafico-bloco" style="margin-top:12px"><h3>CDB</h3>
+    <div class="tile-sub">Valor estimado pelo CDI diário do Banco Central (até ${data(D.cdi_diario?.at(-1)?.[0])}),
+      para CDB pós-fixado. IR pela tabela regressiva.</div>
+    <div style="overflow-x:auto"><table>
+      <thead><tr><th class="esq">Banco</th><th>Aplicado</th><th>Data</th><th>% do CDI</th><th>Valor bruto</th>
+        <th>Rendeu</th><th>IR</th><th>Líquido</th><th></th></tr></thead>
+      <tbody>${linhas || '<tr style="cursor:default"><td colspan="9" class="vazio esq">Nenhum CDB cadastrado neste aparelho.</td></tr>'}</tbody>
+    </table></div>
+    <button class="botao" id="cdb-novo" style="margin-top:8px">Adicionar CDB</button></div>`;
+}
+function ligarCdbs() {
+  $('#cdb-novo')?.addEventListener('click', () => { local.cdbs.push({ pct: 100 }); salvarLocal(); desenharCarteiras(); });
+  for (const b of document.querySelectorAll('[data-remover]')) b.addEventListener('click', () => {
+    local.cdbs.splice(Number(b.dataset.remover), 1);
+    salvarLocal();
+    desenharCarteiras();
+  });
+  for (const i of document.querySelectorAll('tr[data-cdb] input')) i.addEventListener('change', () => {
+    local.cdbs[Number(i.closest('tr').dataset.cdb)][i.dataset.campo] = i.type === 'number' ? Number(i.value) : i.value;
+    salvarLocal();
+    desenharCarteiras();
+  });
+}
+
+function resumoCarteira(c) {
+  const el = document.getElementById(`resumo-${c.id}`);
+  let saldo = 0, renda = 0;
+  if (c.acoes) for (const l of linhasAcoes(c)) { saldo += l.saldo; renda += l.renda; }
+  for (const tk of c.etfs ?? []) saldo += (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0);
+  for (const t of c.tesouro ?? []) saldo += (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (infoTesouro(t).pu ?? 0);
+  if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) saldo += calcularCdb(cdb).bruto;
+  if (!saldo) { el.innerHTML = '<p class="tile-sub" style="margin:0">Preencha as quantidades para ver o saldo e a renda estimada.</p>'; return; }
+  el.innerHTML = `<div class="bloco"><h3>Saldo estimado</h3><div class="tile-valor">${dinheiro(saldo)}</div>
+      <div class="tile-sub">Pelos preços de ${data(D.data_precos)}</div></div>
+    ${c.acoes ? `<div class="bloco"><h3>Renda anual estimada</h3><div class="tile-valor">${dinheiro(renda)}</div>
+      <div class="tile-sub">${pct(renda / saldo)} sobre o saldo, pelos dividendos dos últimos 12 meses</div></div>` : ''}`;
 }
 
 // ---------- Ranking ----------
@@ -429,6 +710,7 @@ function desenharComparacao(emps, tks) {
 
 // ---------- ETFs e renda fixa ----------
 let periodoEtf = 3;
+const indexador = titulo => /IPCA|Renda\+|Educa\+/.test(titulo) ? 'IPCA + ' : /IGPM/.test(titulo) ? 'IGP-M + ' : /Selic/.test(titulo) ? 'Selic + ' : '';
 function montarEtfs(el) {
   const linhaRet = (r, c) => `${pctSinal(r)}${ok(c) ? `<span class="setor"> · CDI ${pct(c)}</span>` : ''}`;
   const premios = D.empresas.filter(e => e.elegivel && ok(e.premio_vs_tesouro) && e.nota_qualidade >= 60 && !e.lucro_suspeito && (e.financeira || e.nota_saude >= 50))
@@ -457,8 +739,9 @@ function montarEtfs(el) {
     </div>
     <div class="duas-colunas">
       <div class="grafico-bloco"><h3>Tesouro Direto hoje</h3><div class="tile-sub">Taxas de compra de ${data(D.macro.tesouro_data)}</div>
-        <table><thead><tr><th class="esq">Título</th><th>Vencimento</th><th>Taxa</th></tr></thead><tbody>
-        ${tes.map(t => `<tr style="cursor:default"><td class="esq">${esc(t.titulo)}</td><td>${data(t.vencimento)}</td><td>${t.titulo.includes('IPCA') ? 'IPCA + ' : ''}${num(t.taxa, 2)}%</td></tr>`).join('')}
+        <table><thead><tr><th class="esq">Título · vencimento: taxa (★ = na carteira)</th></tr></thead><tbody>
+        ${[...Map.groupBy(tes, t => t.titulo)].map(([titulo, ts]) => `<tr style="cursor:default"><td class="esq" style="white-space:normal">
+          <b>${esc(titulo)}</b><div class="setor">${ts.map(t => `${CARTEIRAS.some(c => (c.tesouro ?? []).some(x => x.titulo === t.titulo && x.vencimento === t.vencimento)) ? '★ ' : ''}${t.vencimento.slice(0, 4)}: ${indexador(titulo)}${num(t.taxa, 2)}%`).join(' · ')}</div></td></tr>`).join('')}
         </tbody></table></div>
       <div class="grafico-bloco"><h3>Ações que mais pagam acima do Tesouro</h3>
         <div class="tile-sub">Lucro/preço (o inverso do P/L, um rendimento real aproximado) menos a taxa do Tesouro IPCA+ ~10 anos

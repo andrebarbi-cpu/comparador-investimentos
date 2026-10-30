@@ -82,6 +82,18 @@ podem ser apagados quando quiser.
   acima de 2, balanço atrasado e salto de preço numa proporção redonda (1:2, 1:10…) depois do
   último balanço, sinal de desdobramento ou grupamento ainda não refletido.
 
+## Carteiras (`config/carteiras.json`)
+
+- A lista de ativos acompanhados fica em `config/carteiras.json`. Para incluir ou trocar um ativo,
+  edite o arquivo e faça o push: a próxima atualização já mostra.
+- **Quantidades e CDBs nunca vão para o site** (ele é público). Cada pessoa digita no próprio
+  aparelho e os números ficam no navegador. O botão "Gerar link com minhas quantidades" cria um
+  link `#importar/...` que leva os números no trecho depois do `#`, que o navegador não envia ao
+  servidor.
+- O CDB é calculado pelo CDI diário do Banco Central, com IR pela tabela regressiva.
+- **Oportunidades** mostram só o que não está na carteira. Setores em `setores_evitar` (hoje,
+  varejo) só aparecem com nota de oportunidade a partir de `nota_minima_excecao` (hoje, 90).
+
 ## Etapas
 
 1. **Coleta** – feita

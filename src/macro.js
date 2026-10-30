@@ -61,18 +61,19 @@ export async function atualizarTesouro(db, anoInicio) {
   const url = 'https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/PrecoTaxaTesouroDireto.csv';
   const arq = await baixar(url, 'tesouro/PrecoTaxaTesouroDireto.csv', { forcar: true });
   const texto = readFileSync(arq).toString('latin1');
-  const ins = db.prepare('INSERT OR REPLACE INTO tesouro (titulo, vencimento, data, taxa) VALUES (?, ?, ?, ?)');
+  const ins = db.prepare('INSERT OR REPLACE INTO tesouro (titulo, vencimento, data, taxa, pu) VALUES (?, ?, ?, ?, ?)');
+  // O arquivo usa vírgula decimal e não tem separador de milhar (ex.: 20185,39)
+  const numero = s => Number((s ?? '').replace(',', '.'));
   const desde = `${anoInicio}-01-01`;
   let n = 0;
   transacao(db, () => {
     for (const r of lerCsv(texto)) {
       const titulo = r['Tipo Titulo'];
-      if (titulo !== 'Tesouro IPCA+' && titulo !== 'Tesouro Prefixado') continue;
       const data = iso(r['Data Base']);
       if (data < desde) continue;
-      const taxa = Number((r['Taxa Compra Manha'] ?? '').replace(',', '.'));
-      if (!taxa) continue;
-      ins.run(titulo, iso(r['Data Vencimento']), data, taxa);
+      const taxa = numero(r['Taxa Compra Manha']), pu = numero(r['PU Base Manha']);
+      if (!taxa && !pu) continue;
+      ins.run(titulo, iso(r['Data Vencimento']), data, taxa || null, pu || null);
       n++;
     }
   });

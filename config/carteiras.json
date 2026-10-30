@@ -1,0 +1,22 @@
+{
+  "_leia": "Ativos acompanhados na aba Carteiras. Só a lista fica aqui (o site é público); quantidades e valores ficam salvos no navegador de cada um.",
+  "carteiras": [
+    {
+      "id": "dividendos",
+      "nome": "Carteira de dividendos",
+      "acoes": ["ITSA4", "BBAS3", "BBSE3", "PSSA3", "CPFE3", "CXSE3", "TIMS3", "VALE3", "SAPR4"]
+    },
+    {
+      "id": "global",
+      "nome": "Carteira global e renda fixa",
+      "etfs": ["IVVB11"],
+      "tesouro": [{ "titulo": "Tesouro IPCA+", "vencimento": "2050-08-15" }],
+      "cdb": true
+    }
+  ],
+  "oportunidades": {
+    "_leia": "Setores voláteis que só aparecem nas oportunidades quando a nota é excepcional.",
+    "setores_evitar": ["Comércio (Atacado e Varejo)"],
+    "nota_minima_excecao": 90
+  }
+}

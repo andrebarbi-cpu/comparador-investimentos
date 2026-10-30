@@ -123,7 +123,9 @@ export async function atualizarDemonstracoes(db, tipo, ano, { soSeMudou = false 
   let gravados = 0;
   transacao(db, () => {
     for (const rec of recs.values()) {
-      const temCon = rec.contas.con.DRE?.size > 0 || rec.contas.con.BPA?.size > 0;
+      // Consolidado só vale se tiver números: há empresas que entregam o consolidado zerado (ex.: TIM, DFP 2025)
+      const temValores = esc => !!(esc.DRE?.get('3.01')?.vl || esc.BPA?.get('1')?.vl);
+      const temCon = temValores(rec.contas.con);
       const c = temCon ? rec.contas.con : rec.contas.ind;
       if (!c.BPA && !c.DRE) continue;
       const f = extrairCampos(c, temCon ? rec.contas.ind : null);
