@@ -514,7 +514,7 @@ function gravarTabela(db, nome, linhas, chave) {
   }));
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const db = abrirDb();
   calcular(db);
   db.close();

@@ -17,6 +17,13 @@
   "oportunidades": {
     "_leia": "Setores voláteis que só aparecem nas oportunidades quando a nota é excepcional.",
     "setores_evitar": ["Comércio (Atacado e Varejo)"],
-    "nota_minima_excecao": 90
+    "nota_minima_excecao": 90,
+    "foco": {
+      "_leia": "Visão padrão: setores perenes e empresas grandes (confiança no aporte). Valores em reais.",
+      "setores": ["Bancos", "Seguradoras e Corretoras", "Intermediação Financeira", "Energia Elétrica",
+        "Saneamento, Serv. Água e Gás", "Telecomunicações"],
+      "valor_mercado_minimo": 5000000000,
+      "valor_mercado_minimo_financeiras": 20000000000
+    }
   }
 }

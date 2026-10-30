@@ -87,15 +87,35 @@ function mostrarAba(nome, arg) {
 const irPara = h => { location.hash = h; };
 
 // ---------- Oportunidades ----------
+// Foco: setores perenes e empresas grandes (confiança no aporte). Valores em config/carteiras.json.
+const REGRA = D.config?.oportunidades ?? {};
+const FOCO = REGRA.foco ?? {};
+const grande = e => (e.vm ?? 0) >= (e.financeira ? FOCO.valor_mercado_minimo_financeiras ?? 0 : FOCO.valor_mercado_minimo ?? 0);
+const perene = e => (FOCO.setores ?? []).includes(e.setor);
+const MODOS_OPORT = {
+  foco: ['Setores perenes', e => perene(e) && grande(e)],
+  grandes: ['Empresas grandes', e => grande(e)],
+  todas: ['Todas', () => true],
+};
+let modoOport = 'foco';
+
 function montarOportunidades(el) {
   // Fora da carteira e sem setores voláteis (varejo), salvo nota excepcional
-  const regra = D.config?.oportunidades ?? {};
-  const evitar = new Set(regra.setores_evitar ?? []), excecao = regra.nota_minima_excecao ?? 101;
+  const evitar = new Set(REGRA.setores_evitar ?? []), excecao = REGRA.nota_minima_excecao ?? 101;
   const todas = D.empresas.filter(e => e.oportunidade).sort((a, b) => b.nota_oportunidade - a.nota_oportunidade);
   const daCarteira = todas.filter(e => naCarteira.has(e.cnpj));
   const ocultas = todas.filter(e => !naCarteira.has(e.cnpj) && evitar.has(e.setor) && e.nota_oportunidade < excecao);
-  const lista = todas.filter(e => !naCarteira.has(e.cnpj) && !ocultas.includes(e));
+  const candidatas = todas.filter(e => !naCarteira.has(e.cnpj) && !ocultas.includes(e));
+  const porModo = Object.fromEntries(Object.entries(MODOS_OPORT).map(([k, [, f]]) => [k, candidatas.filter(f)]));
+  const lista = porModo[modoOport];
   const linkTk = e => `<a href="#empresa/${esc(e.ticker)}">${esc(e.ticker)}</a>`;
+  const bi = v => num(v / 1e9, 0);
+  const corte = `valor de mercado a partir de R$ ${bi(FOCO.valor_mercado_minimo)} bi (bancos e seguradoras: R$ ${bi(FOCO.valor_mercado_minimo_financeiras)} bi)`;
+  const explicacao = {
+    foco: `Bancos, seguros, energia, saneamento e telecom, com ${corte}.`,
+    grandes: `Qualquer setor, com ${corte}.`,
+    todas: 'Inclui empresas pequenas: mais risco e menos liquidez.',
+  }[modoOport];
   const b = etf.BOVA11;
   const queda = b && b.distancia_maxima_52s < -0.1;
   el.innerHTML = `
@@ -107,10 +127,16 @@ function montarOportunidades(el) {
       ${pct(-b.distancia_maxima_52s, 0)} abaixo do pico das últimas 52 semanas (${pctSinal(b.ret_1m)} no último mês).
       Os múltiplos usam o lucro dos últimos 12 meses, de antes da queda. Parte do “desconto” pode ser o mercado
       antecipando lucros menores, e não uma pechincha. Confira o motivo da queda antes de decidir.</div></div>` : ''}
-    <p class="contagem" style="margin:0 0 10px">${lista.length} oportunidades fora da carteira.
+    <div class="filtros"><span class="segmentado" role="group" aria-label="Quais empresas mostrar">
+      ${Object.entries(MODOS_OPORT).map(([k, [r]]) => `<button data-modo="${k}" aria-pressed="${k === modoOport}">${r} (${porModo[k].length})</button>`).join('')}
+    </span></div>
+    <p class="contagem" style="margin:0 0 10px">${explicacao}
       ${daCarteira.length ? `Da carteira, ${daCarteira.map(linkTk).join(', ')} também aparece${daCarteira.length > 1 ? 'm' : ''} como oportunidade (veja a aba Carteiras).` : ''}
-      ${ocultas.length ? `${ocultas.length} de varejo ficaram de fora por terem nota abaixo de ${excecao}: ${ocultas.map(linkTk).join(', ')}.` : ''}</p>
-    <div class="cartoes">${lista.map(cartaoOportunidade).join('') || '<p class="vazio">Nenhuma empresa atende aos critérios hoje.</p>'}</div>`;
+      ${ocultas.length ? `${ocultas.length} de varejo ficaram de fora por terem nota abaixo de ${excecao}.` : ''}</p>
+    <div class="cartoes">${lista.map(cartaoOportunidade).join('') || `<p class="vazio">${modoOport === 'foco'
+      ? 'Nenhuma empresa grande de setor perene está barata contra o próprio histórico hoje. Veja “Empresas grandes”.'
+      : 'Nenhuma empresa atende aos critérios hoje.'}</p>`}</div>`;
+  for (const btn of el.querySelectorAll('[data-modo]')) btn.addEventListener('click', () => { modoOport = btn.dataset.modo; montarOportunidades(el); });
   for (const c of el.querySelectorAll('.cartao')) c.addEventListener('click', () => irPara(`empresa/${c.dataset.ticker}`));
   for (const s of el.querySelectorAll('.spark')) desenharSpark(s, porTicker.get(s.dataset.ticker));
 }
@@ -254,6 +280,14 @@ function desenharCarteiras() {
   for (const tr of corpo.querySelectorAll('tr[data-ticker]')) tr.addEventListener('click', ev => {
     if (!ev.target.closest('input')) irPara(`empresa/${tr.dataset.ticker}`);
   });
+  // Clique no título ordena; o segundo clique inverte. Texto começa em A→Z, números do maior para o menor.
+  for (const th of corpo.querySelectorAll('th[data-ordem]')) th.addEventListener('click', () => {
+    const id = th.closest('.carteira').dataset.id, k = th.dataset.ordem;
+    const atual = ordemCarteira[id];
+    const col = COLUNAS_CARTEIRA.find(c => c.k === k);
+    ordemCarteira[id] = atual?.k === k ? { k, desc: !atual.desc } : { k, desc: !col.texto && k !== 'situacao' && k !== 'pl' };
+    desenharCarteiras();
+  });
   ligarCdbs();
   for (const c of CARTEIRAS) for (const t of c.tesouro ?? []) graficoTesouro(t);
 }
@@ -265,14 +299,41 @@ function linhasAcoes(c) {
     return { tk, e, p, q, saldo: q * (p ?? 0), renda: q * (p ?? 0) * (e?.dy ?? 0) };
   });
 }
+// Colunas da tabela de ações da carteira: rótulo, dica e o valor usado para ordenar
+const COLUNAS_CARTEIRA = [
+  { k: 'ticker', r: 'Ação', esq: true, v: l => l.tk, texto: true },
+  { k: 'qtd', r: 'Qtd.', v: l => l.q },
+  { k: 'preco', r: 'Preço', v: l => l.p },
+  { k: 'dia', r: 'Dia', v: l => variacao(l.tk, 1) },
+  { k: 'ano', r: '12 meses', v: l => variacao(l.tk, 365) },
+  { k: 'saldo', r: 'Saldo', v: l => l.saldo },
+  { k: 'peso', r: 'Peso', v: l => l.saldo },
+  { k: 'dy', r: 'Div. 12m', v: l => l.e?.dy, dica: 'Dividendos e JCP pagos nos últimos 12 meses sobre o preço' },
+  { k: 'renda', r: 'Renda/ano', v: l => l.renda, dica: 'Quantidade × preço × dividendos dos últimos 12 meses' },
+  { k: 'pl', r: 'P/L × mediana', v: l => ok(l.e?.pl) && ok(l.e?.pl_mediana) ? l.e.pl / l.e.pl_mediana : null, dica: 'P/L de hoje × mediana desde 2020; ordena pelo desconto' },
+  { k: 'nota', r: 'Nota', v: l => l.e?.nota_geral },
+  { k: 'situacao', r: 'Situação', esq: true, v: l => l.e?.pl_percentil, dica: 'Ordena do mais barato ao mais caro contra o próprio histórico' },
+];
+const ordemCarteira = {};
+function ordenarLinhas(linhas, id) {
+  const o = ordemCarteira[id];
+  if (!o) return linhas;
+  const col = COLUNAS_CARTEIRA.find(c => c.k === o.k);
+  return [...linhas].sort((a, b) => {
+    const va = col.v(a), vb = col.v(b);
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    const r = col.texto ? String(va).localeCompare(String(vb), 'pt-BR') : va - vb;
+    return o.desc ? -r : r;
+  });
+}
 function blocoAcoes(c) {
-  const linhas = linhasAcoes(c);
+  const linhas = ordenarLinhas(linhasAcoes(c), c.id);
   const total = linhas.reduce((s, l) => s + l.saldo, 0);
+  const o = ordemCarteira[c.id];
   return `<div class="tabela-caixa" style="max-height:none"><table>
-    <thead><tr><th class="esq">Ação</th><th>Qtd.</th><th>Preço</th><th>Dia</th><th>12 meses</th><th>Saldo</th><th>Peso</th>
-      <th title="Dividendos e JCP pagos nos últimos 12 meses sobre o preço">Div. 12m</th>
-      <th title="Quantidade × preço × dividendos dos últimos 12 meses">Renda/ano</th>
-      <th title="P/L de hoje × mediana desde 2020">P/L × mediana</th><th>Nota</th><th class="esq">Situação</th></tr></thead>
+    <thead><tr>${COLUNAS_CARTEIRA.map(col => `<th data-ordem="${col.k}" class="${col.esq ? 'esq' : ''}"
+      ${col.dica ? `title="${esc(col.dica)}"` : ''} ${o?.k === col.k ? `aria-sort="${o.desc ? 'descending' : 'ascending'}"` : ''}>${col.r}</th>`).join('')}</tr></thead>
     <tbody>${linhas.map(({ tk, e, p, q, saldo, renda }) => `<tr data-ticker="${esc(tk)}">
       <td class="esq empresa"><b>${esc(tk)}</b><span class="nome">${esc(e?.nome ?? '')}</span></td>
       <td>${campoQtd(tk)}</td><td>R$ ${num(p, 2)}</td>
@@ -437,7 +498,7 @@ const COLUNAS = [
   { k: 'liquidez', r: 'Liquidez/dia', f: v => dinheiro(v), maior: 1 },
   { k: 'selos', r: 'Selos', esq: true, f: (v, e) => selos(e), semOrdem: true },
 ];
-const estadoRanking = { grupo: 'empresas', busca: '', setor: '', liquidez: 1e6, oport: false, graham: false, bazin: false, magica: false, foraRanking: false, ordem: 'nota_geral', desc: true };
+const estadoRanking = { grupo: 'empresas', busca: '', setor: '', liquidez: 1e6, grandes: true, perenes: false, oport: false, graham: false, bazin: false, magica: false, foraRanking: false, ordem: 'nota_geral', desc: true };
 
 function montarRanking(el) {
   const setores = [...new Set(D.empresas.map(e => e.setor))].filter(Boolean).sort((a, b) => a.localeCompare(b, 'pt-BR'));
@@ -455,6 +516,8 @@ function montarRanking(el) {
         <option value="0">Qualquer liquidez</option><option value="1000000" selected>Liquidez ≥ R$ 1 mi/dia</option>
         <option value="10000000">≥ R$ 10 mi/dia</option><option value="50000000">≥ R$ 50 mi/dia</option>
       </select>
+      <label title="Valor de mercado mínimo da visão de foco (bancos e seguradoras têm corte maior)"><input type="checkbox" id="r-grandes" checked> Só empresas grandes</label>
+      <label title="Bancos, seguros, energia, saneamento e telecom"><input type="checkbox" id="r-perenes"> Só setores perenes</label>
       <label><input type="checkbox" id="r-oport"> Só oportunidades</label>
       <label><input type="checkbox" id="r-graham"> Graham</label>
       <label><input type="checkbox" id="r-bazin"> Bazin</label>
@@ -468,7 +531,7 @@ function montarRanking(el) {
   $('#r-busca').addEventListener('input', ev => { s.busca = ev.target.value.trim().toUpperCase(); desenharRanking(); });
   $('#r-setor').addEventListener('change', ev => { s.setor = ev.target.value; desenharRanking(); });
   $('#r-liq').addEventListener('change', ev => { s.liquidez = Number(ev.target.value); desenharRanking(); });
-  for (const [id, k] of [['r-oport', 'oport'], ['r-graham', 'graham'], ['r-bazin', 'bazin'], ['r-magica', 'magica'], ['r-fora', 'foraRanking']])
+  for (const [id, k] of [['r-grandes', 'grandes'], ['r-perenes', 'perenes'], ['r-oport', 'oport'], ['r-graham', 'graham'], ['r-bazin', 'bazin'], ['r-magica', 'magica'], ['r-fora', 'foraRanking']])
     $(`#${id}`).addEventListener('change', ev => { s[k] = ev.target.checked; desenharRanking(); });
   $('#r-tabela tbody').addEventListener('click', ev => { const tr = ev.target.closest('tr[data-ticker]'); if (tr) irPara(`empresa/${tr.dataset.ticker}`); });
   $('#r-tabela tbody').addEventListener('keydown', ev => { const tr = ev.target.closest('tr[data-ticker]'); if (tr && ev.key === 'Enter') irPara(`empresa/${tr.dataset.ticker}`); });
@@ -488,6 +551,7 @@ function desenharRanking() {
   const linhas = D.empresas.filter(e => !!e.financeira === fin
     && (s.foraRanking || e.elegivel)
     && (e.liquidez ?? 0) >= s.liquidez
+    && (!s.grandes || grande(e)) && (!s.perenes || perene(e))
     && (!s.setor || e.setor === s.setor)
     && (!s.busca || e.tickers.includes(s.busca) || e.nome.toUpperCase().includes(s.busca))
     && (!s.oport || e.oportunidade) && (!s.graham || e.selo_graham) && (!s.bazin || e.selo_bazin) && (!s.magica || e.selo_magica));

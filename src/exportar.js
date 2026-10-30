@@ -82,7 +82,7 @@ export function exportar(db) {
   log(`Exportado site/dados.js (${(texto.length / 1024).toFixed(0)} KB)`);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const db = abrirDb();
   exportar(db);
   db.close();

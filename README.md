@@ -93,6 +93,11 @@ podem ser apagados quando quiser.
 - O CDB é calculado pelo CDI diário do Banco Central, com IR pela tabela regressiva.
 - **Oportunidades** mostram só o que não está na carteira. Setores em `setores_evitar` (hoje,
   varejo) só aparecem com nota de oportunidade a partir de `nota_minima_excecao` (hoje, 90).
+- **Foco** (visão padrão das oportunidades e filtro "Só empresas grandes" do ranking): setores
+  perenes de `foco.setores` e valor de mercado mínimo de R$ 5 bi, ou R$ 20 bi para bancos e
+  seguradoras, para só aparecerem empresas em que dá para confiar no aporte.
+- **Tickers corrigidos à mão** ficam em `config/tickers_extras.json`, para empresas que preencheram
+  o código errado na CVM (ex.: BTG com "000000"). Papéis sem cadastro herdam a empresa pelo prefixo.
 
 ## Etapas
 

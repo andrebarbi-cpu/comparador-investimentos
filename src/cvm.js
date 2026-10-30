@@ -1,7 +1,8 @@
 // Dados oficiais das companhias abertas: cadastro, códigos de negociação e demonstrações
 // financeiras (DFP anual e ITR trimestral). Fonte: https://dados.cvm.gov.br
 import { readFileSync } from 'node:fs';
-import { baixar, abrirZip, lerCsv, log } from './util.js';
+import { join } from 'node:path';
+import { baixar, abrirZip, lerCsv, log, RAIZ } from './util.js';
 import { transacao, arquivoMudou, marcarArquivo } from './db.js';
 
 const BASE = 'https://dados.cvm.gov.br/dados/CIA_ABERTA';
@@ -21,7 +22,10 @@ export async function atualizarCadastro(db, anoFim) {
     if (!atual || r.SIT === 'ATIVO') porCnpj.set(r.CNPJ_CIA, r);
   }
 
-  // Tickers e segmento de listagem vêm do Formulário Cadastral (FCA) dos últimos anos
+  // Tickers e segmento de listagem vêm do Formulário Cadastral (FCA) dos últimos anos.
+  // O preenchimento é irregular: há empresas com "data de fim de negociação" em ação ativa (Raízen,
+  // C&A) e mercado em branco (Multilaser), então esses campos não servem de filtro.
+  const classeDe = cod => (cod.slice(4) === '3' ? 'ON' : cod.slice(4) === '11' ? 'UNIT' : 'PN');
   const tickers = new Map(), segmentos = new Map();
   for (let ano = anoFim - 2; ano <= anoFim; ano++) {
     const zipUrl = `${BASE}/DOC/FCA/DADOS/fca_cia_aberta_${ano}.zip`;
@@ -30,13 +34,31 @@ export async function atualizarCadastro(db, anoFim) {
     const zip = abrirZip(zipArq);
     for (const r of lerCsv(zip.texto(`fca_cia_aberta_valor_mobiliario_${ano}.csv`))) {
       const cod = (r.Codigo_Negociacao ?? '').trim().toUpperCase();
-      if (r.Mercado !== 'Bolsa' || !/^[A-Z0-9]{4}\d{1,2}$/.test(cod)) continue;
+      if ((r.Mercado && r.Mercado !== 'Bolsa') || !/^[A-Z0-9]{4}\d{1,2}$/.test(cod)) continue;
       if (!/^(A[çc][õo]es|Units?)/i.test(r.Valor_Mobiliario ?? '')) continue;
-      if (r.Data_Fim_Negociacao) { tickers.delete(cod); continue; }
-      const sufixo = cod.slice(4);
-      const classe = sufixo === '3' ? 'ON' : sufixo === '11' ? 'UNIT' : 'PN';
-      tickers.set(cod, { cnpj: r.CNPJ_Companhia, classe });
+      tickers.set(cod, { cnpj: r.CNPJ_Companhia, classe: classeDe(cod) });
       if (r.Segmento) segmentos.set(r.CNPJ_Companhia, r.Segmento);
+    }
+  }
+  // Correções manuais para quem preencheu o ticker errado (ex.: BTG com "000000")
+  const extras = JSON.parse(readFileSync(join(RAIZ, 'config', 'tickers_extras.json'), 'utf8'));
+  for (const [cnpj, cods] of Object.entries(extras)) {
+    if (cnpj.startsWith('_')) continue;
+    for (const cod of cods) tickers.set(cod, { cnpj, classe: classeDe(cod) });
+  }
+  // Papéis negociados na B3 sem cadastro herdam a empresa de outro código com o mesmo prefixo
+  // (ex.: KLBN4 a partir de KLBN11)
+  const porPrefixo = new Map();
+  for (const [cod, t] of tickers) {
+    const p = cod.slice(0, 4);
+    porPrefixo.set(p, porPrefixo.has(p) && porPrefixo.get(p) !== t.cnpj ? null : t.cnpj);
+  }
+  let herdados = 0;
+  for (const { ticker } of db.prepare(`SELECT DISTINCT ticker FROM cotacoes WHERE data >= date('now', '-90 day')`).all()) {
+    const cnpj = porPrefixo.get(ticker.slice(0, 4));
+    if (cnpj && !tickers.has(ticker) && /^[A-Z0-9]{4}([3-8]|11)$/.test(ticker)) {
+      tickers.set(ticker, { cnpj, classe: classeDe(ticker) });
+      herdados++;
     }
   }
 
@@ -53,7 +75,7 @@ export async function atualizarCadastro(db, anoFim) {
       ON CONFLICT(ticker) DO UPDATE SET cnpj=excluded.cnpj, classe=excluded.classe, tipo='acao'`);
     for (const [cod, t] of tickers) insTic.run(cod, t.cnpj, t.classe);
   });
-  log(`Cadastro: ${porCnpj.size} empresas, ${tickers.size} tickers de ações`);
+  log(`Cadastro: ${porCnpj.size} empresas, ${tickers.size} tickers de ações (${herdados} pelo prefixo)`);
 }
 
 // ---------- Demonstrações financeiras ----------
