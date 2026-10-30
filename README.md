@@ -91,6 +91,9 @@ podem ser apagados quando quiser.
   link `#importar/...` que leva os números no trecho depois do `#`, que o navegador não envia ao
   servidor.
 - O CDB é calculado pelo CDI diário do Banco Central, com IR pela tabela regressiva.
+- **Concentração por setor:** barra com a fatia de cada setor no saldo. Bancos, seguradoras e
+  holdings financeiras contam juntos como Financeiro. Acima de `concentracao.limite_setor` (hoje,
+  40%) aparece um alerta.
 - **Oportunidades** mostram só o que não está na carteira. Setores em `setores_evitar` (hoje,
   varejo) só aparecem com nota de oportunidade a partir de `nota_minima_excecao` (hoje, 90).
 - **Foco** (visão padrão das oportunidades e filtro "Só empresas grandes" do ranking): setores

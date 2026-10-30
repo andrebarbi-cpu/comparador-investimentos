@@ -265,6 +265,7 @@ function desenharCarteiras() {
   corpo.innerHTML = CARTEIRAS.map(c => `<section class="carteira" data-id="${esc(c.id)}">
       <h2 style="margin:20px 0 8px">${esc(c.nome)}</h2>
       <div class="blocos" id="resumo-${esc(c.id)}"></div>
+      ${blocoConcentracao(c)}
       ${c.acoes?.length ? blocoAcoes(c) : ''}
       ${c.etfs?.length ? blocoEtfs(c) : ''}
       ${c.tesouro?.length ? blocoTesouro(c) : ''}
@@ -474,6 +475,47 @@ function resumoCarteira(c) {
       <div class="tile-sub">Pelos preços de ${data(D.data_precos)}</div></div>
     ${c.acoes ? `<div class="bloco"><h3>Renda anual estimada</h3><div class="tile-valor">${dinheiro(renda)}</div>
       <div class="tile-sub">${pct(renda / saldo)} sobre o saldo, pelos dividendos dos últimos 12 meses</div></div>` : ''}`;
+}
+
+// Fatia de cada setor no saldo. Bancos, seguradoras e holdings financeiras contam juntos,
+// porque o risco é o mesmo (juros, crédito, política). ETF, Tesouro e CDB aparecem como classes.
+function itensConcentracao(c) {
+  const grupos = new Map();
+  const somar = (nome, valor, ativo, acao) => {
+    if (!(valor > 0)) return;
+    const g = grupos.get(nome) ?? { nome, valor: 0, ativos: [], acao };
+    g.valor += valor;
+    g.ativos.push(ativo);
+    grupos.set(nome, g);
+  };
+  if (c.acoes) for (const l of linhasAcoes(c)) {
+    somar(l.e?.financeira ? 'Financeiro (bancos e seguros)' : l.e?.setor ?? 'Outros', l.saldo, l.tk, true);
+  }
+  for (const tk of c.etfs ?? []) somar(`ETF (${tk})`, (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0), tk, false);
+  for (const t of c.tesouro ?? []) {
+    somar('Tesouro Direto', (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (infoTesouro(t).pu ?? 0), `${t.titulo} ${t.vencimento.slice(0, 4)}`, false);
+  }
+  if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) somar('CDB', calcularCdb(cdb).bruto, cdb.nome || 'CDB', false);
+  const total = [...grupos.values()].reduce((s, g) => s + g.valor, 0);
+  return { total, itens: [...grupos.values()].map(g => ({ ...g, fatia: g.valor / total })).sort((a, b) => b.valor - a.valor) };
+}
+function blocoConcentracao(c) {
+  const { total, itens } = itensConcentracao(c);
+  if (!total || itens.length < 2 && !itens[0]?.acao) return '';
+  const limite = D.config?.concentracao?.limite_setor;
+  const acima = itens.filter(i => i.acao && ok(limite) && i.fatia > limite);
+  return `<div class="grafico-bloco" style="margin-bottom:12px">
+    <h3>Concentração por setor</h3>
+    <div class="tile-sub">${ok(limite) && c.acoes ? `A linha vertical marca o limite de referência de ${pct(limite, 0)} por setor de ações.` : 'Fatia de cada classe no saldo.'}</div>
+    <div class="barras" role="list">${itens.map(i => `<div class="barra-linha" role="listitem">
+      <div class="barra-rotulo">${esc(i.nome)}<span class="setor">${i.ativos.map(esc).join(', ')}</span></div>
+      <div class="barra-trilho"><i style="width:${(100 * i.fatia).toFixed(1)}%"></i>
+        ${ok(limite) && c.acoes ? `<b class="barra-limite" style="left:${100 * limite}%" aria-hidden="true"></b>` : ''}</div>
+      <div class="barra-valor">${acima.includes(i) ? `${ICONE_ALERTA.replace('icone-alerta', 'icone-alerta icone-mini')} ` : ''}<b>${pct(i.fatia, 0)}</b>
+        <span class="setor">${dinheiro(i.valor)}</span></div></div>`).join('')}</div>
+    ${acima.length ? `<p class="tile-sub" style="margin:8px 0 0">${acima.map(i => `<b>${esc(i.nome)}</b> está com ${pct(i.fatia, 0)} do saldo, acima do limite de ${pct(limite, 0)}`).join('; ')}.
+      Uma notícia ruim para o setor afeta quase toda a carteira de uma vez. Novos aportes em outros setores diminuem esse risco.</p>` : ''}
+  </div>`;
 }
 
 // ---------- Ranking ----------
