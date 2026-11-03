@@ -730,8 +730,10 @@ const LINHAS_COMPARAR = [
   ['P/L × mediana desde 2020', e => ok(e.pl) && ok(e.pl_mediana) ? pctSinal(e.pl / e.pl_mediana - 1, 0) : '–'],
   ['P/VP', e => num(e.pvp, 2), 'pvp', 0],
   ['EV/EBITDA', e => num(e.ev_ebitda), 'ev_ebitda', 0],
-  ['Dividendos 12m', e => pct(e.dy), 'dy', 1],
-  ['Dividendos média 3 anos', e => pct(e.dy_3a), 'dy_3a', 1],
+  ['Dividend yield (12 meses)', e => pct(e.dy), 'dy', 1],
+  ['Dividend yield (média 3 anos)', e => pct(e.dy_3a), 'dy_3a', 1],
+  ['Dividend yield mediano desde 2020', e => pct(e.dy_mediana), 'dy_mediana', 1],
+  ['Earnings yield (lucro/preço)', e => pct(e.earnings_yield), 'earnings_yield', 1],
   ['ROE', e => pct(e.roe), 'roe', 1],
   ['ROIC', e => pct(e.roic), 'roic', 1],
   ['Margem líquida', e => pct(e.margem_liq), 'margem_liq', 1],
@@ -745,7 +747,7 @@ const LINHAS_COMPARAR = [
   ['Selos', e => selos(e) || '–'],
   ['Alertas', e => e.alertas ? `<span title="${esc(e.alertas)}">${e.alertas.split(' | ').length}</span>` : '–'],
 ];
-const INDICADORES_GRAFICO = { pl: ['P/L', 1, v => num(v)], pvp: ['P/VP', 2, v => num(v, 2)], ev_ebitda: ['EV/EBITDA', 3, v => num(v)], dy: ['Dividendos 12m', 4, v => pct(v)] };
+const INDICADORES_GRAFICO = { pl: ['P/L', 1, v => num(v)], pvp: ['P/VP', 2, v => num(v, 2)], ev_ebitda: ['EV/EBITDA', 3, v => num(v)], dy: ['Dividend yield', 4, v => pct(v)] };
 let indicadorComparar = 'pl';
 
 function montarComparar(el, arg) {
