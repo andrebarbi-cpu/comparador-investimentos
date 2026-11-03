@@ -783,6 +783,11 @@ function desenharComparacao(emps, tks) {
   };
   const misturado = new Set(emps.map(e => !!e.financeira)).size > 1;
   corpo.innerHTML = `
+    <div class="filtros"><button class="botao" id="c-imagem">${toque ? 'Compartilhar como imagem' : 'Salvar como imagem'}</button>
+      <span class="contagem" id="c-imagem-msg"></span></div>
+    <div id="c-captura">
+    <div class="so-captura captura-cabecalho"><b>Comparador de Investimentos</b>
+      <span>${tks.join(' × ')} · preços de ${data(D.data_precos)}</span></div>
     ${misturado ? `<div class="aviso">${ICONE_ALERTA}<div>As notas de bancos e seguradoras são calculadas contra outros bancos e seguradoras, não contra as demais empresas. Compare as notas só dentro do mesmo grupo.</div></div>` : ''}
     <div class="tabela-caixa" style="max-height:none"><table>
       <thead><tr><th class="esq">Indicador</th>${tks.map((t, i) => `<th><span style="display:inline-block;width:10px;height:3px;border-radius:2px;background:var(--serie-${i + 1});vertical-align:middle;margin-right:6px"></span><a href="#empresa/${t}">${t}</a></th>`).join('')}</tr></thead>
@@ -792,14 +797,19 @@ function desenharComparacao(emps, tks) {
       }).join('')}</tbody>
     </table></div>
     <div class="grafico-bloco" style="margin-top:12px">
-      <h3>Histórico mês a mês</h3>
-      <div class="filtros periodos"><span class="segmentado" role="group" aria-label="Indicador">
+      <h3>Histórico mês a mês<span class="so-captura" id="c-ind-nome"></span></h3>
+      <div class="filtros periodos nao-imprimir"><span class="segmentado" role="group" aria-label="Indicador">
         ${Object.entries(INDICADORES_GRAFICO).map(([k, [r]]) => `<button data-ind="${k}" aria-pressed="${k === indicadorComparar}">${r}</button>`).join('')}
       </span></div>
       <div class="grafico" id="g-comparar"></div>
+    </div>
+    <p class="so-captura captura-rodape">${esc(location.host + location.pathname)} · dados da CVM, B3, Banco Central e Tesouro.
+      Material de estudo, não é recomendação de compra ou venda.</p>
     </div>`;
+  $('#c-imagem').addEventListener('click', () => exportarImagem($('#c-captura'), `comparacao-${tks.join('-')}-${D.data_precos}.png`, $('#c-imagem-msg')));
   const desenhar = () => {
     const [nome, idx, fmt] = INDICADORES_GRAFICO[indicadorComparar];
+    $('#c-ind-nome').textContent = `: ${nome}`;
     graficoLinhas($('#g-comparar'), {
       fmt, altura: 280, fmtEixo: indicadorComparar === 'dy' ? v => pct(v, 0) : null,
       series: emps.map((e, i) => ({ nome: tks[i], cor: `var(--serie-${i + 1})`, pontos: (D.historico[e.cnpj] ?? []).map(p => [p[0], p[idx]]) })),
@@ -812,6 +822,65 @@ function desenharComparacao(emps, tks) {
     desenhar();
   });
   desenhar();
+}
+
+// ---------- Exportar como imagem ----------
+// A biblioteca (html-to-image, ~20 KB) só é baixada no primeiro clique.
+const toque = matchMedia('(pointer: coarse)').matches;
+let bibliotecaImagem;
+function carregarBibliotecaImagem() {
+  bibliotecaImagem ??= new Promise((resolver, rejeitar) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js';
+    s.onload = () => resolver(window.htmlToImage);
+    s.onerror = () => { bibliotecaImagem = null; rejeitar(new Error('sem conexão com a biblioteca de imagem')); };
+    document.head.appendChild(s);
+  });
+  return bibliotecaImagem;
+}
+// Gera o PNG do elemento numa largura fixa (para a tabela não sair cortada no celular)
+async function gerarImagem(no) {
+  const lib = await carregarBibliotecaImagem();
+  // Redesenha os gráficos na largura atual sem esperar o ResizeObserver (que atrasa em aba escondida)
+  const redesenhar = () => {
+    for (const g of no.querySelectorAll('.grafico')) {
+      if (!g._desenhar) continue;
+      g._largura = Math.round(g.clientWidth);
+      g._desenhar(g._largura);
+    }
+  };
+  document.body.classList.add('capturando');
+  try {
+    redesenhar();
+    return await lib.toBlob(no, {
+      pixelRatio: 2, skipFonts: true, cacheBust: false,
+      backgroundColor: getComputedStyle(document.body).backgroundColor,
+    });
+  } finally {
+    document.body.classList.remove('capturando');
+    redesenhar();
+  }
+}
+async function exportarImagem(no, nome, aviso) {
+  aviso.textContent = 'Gerando imagem…';
+  try {
+    const blob = await gerarImagem(no);
+    const arquivo = new File([blob], nome, { type: 'image/png' });
+    // No celular abre o compartilhamento (WhatsApp etc.); no computador baixa o arquivo
+    if (toque && navigator.canShare?.({ files: [arquivo] })) {
+      await navigator.share({ files: [arquivo], title: 'Comparação de ações' });
+      aviso.textContent = '';
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = nome;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      aviso.textContent = `Imagem salva: ${nome}`;
+    }
+  } catch (e) {
+    aviso.textContent = e.name === 'AbortError' ? '' : `Não foi possível gerar a imagem (${e.message}).`;
+  }
 }
 
 // ---------- ETFs e renda fixa ----------

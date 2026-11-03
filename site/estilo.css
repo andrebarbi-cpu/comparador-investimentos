@@ -268,6 +268,18 @@ dl.lista dd { margin: 0; text-align: right; font-weight: 500; }
   .barra-trilho { grid-column: 1 / -1; grid-row: 2; }
 }
 
+/* ---------- Imagem da comparação ---------- */
+.so-captura { display: none; }
+.capturando .so-captura { display: block; }
+.capturando span.so-captura { display: inline; }
+.capturando .nao-imprimir { display: none; }
+.capturando #c-captura { width: 960px; padding: 20px; background: var(--fundo); }
+.capturando #c-captura .tabela-caixa { overflow: visible; }
+.capturando #c-captura a { color: var(--texto); text-decoration: none; }
+.captura-cabecalho { margin-bottom: 12px; font-size: 1rem; }
+.captura-cabecalho span { color: var(--texto-2); margin-left: 8px; }
+.captura-rodape { color: var(--texto-3); font-size: .78rem; margin: 12px 0 0; }
+
 /* ---------- Comparar ---------- */
 .seletores { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
 .seletores .campo { width: 130px; text-transform: uppercase; }
