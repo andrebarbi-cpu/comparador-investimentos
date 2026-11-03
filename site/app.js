@@ -755,7 +755,9 @@ function montarComparar(el, arg) {
     <p class="intro">Escolha até quatro ações. O ponto azul marca a melhor de cada linha. Copie o endereço da página para mandar a comparação.</p>
     <datalist id="lista-tickers">${listaTickers.map(t => `<option value="${t}">${esc(porTicker.get(t).nome)}</option>`).join('')}</datalist>
     <div class="seletores">${[0, 1, 2, 3].map(i => `<input class="campo" list="lista-tickers" placeholder="Ticker ${i + 1}" aria-label="Ticker ${i + 1}" value="${esc(sel[i] ?? '')}">`).join('')}
-      <button class="botao" id="c-limpar">Limpar</button></div>
+      <button class="botao" id="c-limpar">Limpar</button>
+      <button class="botao botao-principal" id="c-imagem">${toque ? 'Compartilhar como imagem' : 'Salvar como imagem'}</button>
+      <span class="contagem" id="c-imagem-msg"></span></div>
     <div id="c-corpo"></div>`;
   const campos = [...el.querySelectorAll('.seletores .campo')];
   const aplicar = () => {
@@ -766,9 +768,15 @@ function montarComparar(el, arg) {
   };
   for (const c of campos) c.addEventListener('change', aplicar);
   $('#c-limpar').addEventListener('click', () => { campos.forEach(c => { c.value = ''; }); aplicar(); });
+  $('#c-imagem').addEventListener('click', () => {
+    if (!selecaoComparar.length) { $('#c-imagem-msg').textContent = 'Escolha pelo menos uma ação para gerar a imagem.'; return; }
+    exportarImagem($('#c-captura'), `comparacao-${selecaoComparar.join('-')}-${D.data_precos}.png`, $('#c-imagem-msg'));
+  });
   desenharComparacao(sel.map(t => porTicker.get(t)), sel);
 }
+let selecaoComparar = [];
 function desenharComparacao(emps, tks) {
+  selecaoComparar = tks;
   const corpo = $('#c-corpo');
   if (!emps.length) {
     const sug = D.empresas.filter(e => e.oportunidade).sort((a, b) => b.nota_oportunidade - a.nota_oportunidade).slice(0, 3).map(e => e.ticker);
@@ -783,8 +791,6 @@ function desenharComparacao(emps, tks) {
   };
   const misturado = new Set(emps.map(e => !!e.financeira)).size > 1;
   corpo.innerHTML = `
-    <div class="filtros"><button class="botao" id="c-imagem">${toque ? 'Compartilhar como imagem' : 'Salvar como imagem'}</button>
-      <span class="contagem" id="c-imagem-msg"></span></div>
     <div id="c-captura">
     <div class="so-captura captura-cabecalho"><b>Comparador de Investimentos</b>
       <span>${tks.join(' × ')} · preços de ${data(D.data_precos)}</span></div>
@@ -806,7 +812,6 @@ function desenharComparacao(emps, tks) {
     <p class="so-captura captura-rodape">${esc(location.host + location.pathname)} · dados da CVM, B3, Banco Central e Tesouro.
       Material de estudo, não é recomendação de compra ou venda.</p>
     </div>`;
-  $('#c-imagem').addEventListener('click', () => exportarImagem($('#c-captura'), `comparacao-${tks.join('-')}-${D.data_precos}.png`, $('#c-imagem-msg')));
   const desenhar = () => {
     const [nome, idx, fmt] = INDICADORES_GRAFICO[indicadorComparar];
     $('#c-ind-nome').textContent = `: ${nome}`;

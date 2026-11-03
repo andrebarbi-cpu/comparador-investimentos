@@ -70,6 +70,10 @@ jobs:
             || gh release create banco --title "Banco de dados" --notes "Banco SQLite atualizado automaticamente. Não apagar."
           gh release upload banco dados/comparador.db.gz --clobber
 
+      # Número da execução nos links dos arquivos: o navegador baixa a versão nova em vez da guardada
+      - name: Versionar arquivos da página
+        run: sed -i -E 's/(estilo\.css|app\.js|dados\.js)"/\1?v=${{ github.run_id }}"/g' site/index.html
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
