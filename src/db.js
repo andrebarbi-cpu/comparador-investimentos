@@ -53,8 +53,15 @@ CREATE TABLE IF NOT EXISTS cotacoes (
   abertura REAL, maxima REAL, minima REAL, fechamento REAL,
   volume REAL,          -- financeiro negociado em R$
   negocios INTEGER,
+  parcial INTEGER,      -- 1 = preço durante o pregão (não oficial), trocado à noite pelo fechamento
   PRIMARY KEY (ticker, data)
 ) WITHOUT ROWID;
+
+-- Pequenos valores de controle (ex.: horário da última cotação parcial)
+CREATE TABLE IF NOT EXISTS meta (
+  chave TEXT PRIMARY KEY,
+  valor TEXT
+);
 
 -- Séries do Banco Central: cdi (% ao dia), selic_meta (% a.a.), ipca (% no mês),
 -- ipca_12m (%), dolar (PTAX venda)
@@ -100,6 +107,8 @@ export function abrirDb() {
   if (!colunas.includes('equivalencia')) db.exec('ALTER TABLE fundamentos ADD COLUMN equivalencia REAL');
   const colTesouro = db.prepare('PRAGMA table_info(tesouro)').all().map(c => c.name);
   if (!colTesouro.includes('pu')) db.exec('ALTER TABLE tesouro ADD COLUMN pu REAL');
+  const colCotacoes = db.prepare('PRAGMA table_info(cotacoes)').all().map(c => c.name);
+  if (!colCotacoes.includes('parcial')) db.exec('ALTER TABLE cotacoes ADD COLUMN parcial INTEGER');
   return db;
 }
 

@@ -44,9 +44,16 @@ const listaTickers = [...porTicker.keys()].sort();
 const etf = Object.fromEntries(D.etfs.map(e => [e.ticker, e]));
 const ipcaRef = D.empresas.find(e => ok(e.tesouro_ipca_ref))?.tesouro_ipca_ref;
 
+// "29/10/2026" no fechamento oficial; "03/11/2026 às 15:27 (parcial)" durante o pregão
+const horaParcial = D.precos_parciais?.hora
+  ? new Date(D.precos_parciais.hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : null;
+const rotuloPrecos = () => D.precos_parciais ? `${data(D.data_precos)} às ${horaParcial ?? '?'} (parcial)` : data(D.data_precos);
+
 // ---------- Topo ----------
 function montarTopo() {
-  $('#atualizado').textContent = `Preços de ${data(D.data_precos)} · gerado em ${new Date(D.gerado_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}`;
+  $('#atualizado').textContent = D.precos_parciais
+    ? `Preços de ${rotuloPrecos()}, com 15 min de atraso · fechamento oficial à noite`
+    : `Preços de fechamento de ${data(D.data_precos)} · gerado em ${new Date(D.gerado_em).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}`;
   const b = etf.BOVA11, m = D.macro;
   const itens = [];
   if (b) itens.push(`Ibovespa (BOVA11) <b class="${classeSinal(b.ret_1m)}">${pctSinal(b.ret_1m)}</b> em 1 mês, <b>${pct(-b.distancia_maxima_52s, 0)}</b> abaixo do pico de 52 semanas`);
@@ -472,7 +479,7 @@ function resumoCarteira(c) {
   if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) saldo += calcularCdb(cdb).bruto;
   if (!saldo) { el.innerHTML = '<p class="tile-sub" style="margin:0">Preencha as quantidades para ver o saldo e a renda estimada.</p>'; return; }
   el.innerHTML = `<div class="bloco"><h3>Saldo estimado</h3><div class="tile-valor">${dinheiro(saldo)}</div>
-      <div class="tile-sub">Pelos preços de ${data(D.data_precos)}</div></div>
+      <div class="tile-sub">Pelos preços de ${rotuloPrecos()}</div></div>
     ${c.acoes ? `<div class="bloco"><h3>Renda anual estimada</h3><div class="tile-valor">${dinheiro(renda)}</div>
       <div class="tile-sub">${pct(renda / saldo)} sobre o saldo, pelos dividendos dos últimos 12 meses</div></div>` : ''}`;
 }
@@ -795,7 +802,7 @@ function desenharComparacao(emps, tks) {
   corpo.innerHTML = `
     <div id="c-captura">
     <div class="so-captura captura-cabecalho"><b>Comparador de Investimentos</b>
-      <span>${tks.join(' × ')} · preços de ${data(D.data_precos)}</span></div>
+      <span>${tks.join(' × ')} · preços de ${rotuloPrecos()}</span></div>
     ${misturado ? `<div class="aviso">${ICONE_ALERTA}<div>As notas de bancos e seguradoras são calculadas contra outros bancos e seguradoras, não contra as demais empresas. Compare as notas só dentro do mesmo grupo.</div></div>` : ''}
     <div class="tabela-caixa" style="max-height:none"><table>
       <thead><tr><th class="esq">Indicador</th>${tks.map((t, i) => `<th><span style="display:inline-block;width:10px;height:3px;border-radius:2px;background:var(--serie-${i + 1});vertical-align:middle;margin-right:6px"></span><a href="#empresa/${t}">${t}</a></th>`).join('')}</tr></thead>

@@ -34,6 +34,7 @@ Precisa só do Node 24 ou mais novo, sem nenhum pacote instalado.
 ```
 npm run carga-inicial   # uma vez: baixa o histórico desde 2016 (~1,5 GB de download)
 npm run atualizar       # diária: só o que mudou, e recalcula tudo no fim
+npm run intraday        # preços durante o pregão (parciais), sem mexer no resto
 npm run calcular        # só recalcula indicadores e notas (2 segundos)
 npm run resumo          # confere o que tem no banco
 npm run ver             # abre a página em http://localhost:8123
@@ -56,6 +57,9 @@ podem ser apagados quando quiser.
 - **Lucro não recorrente:** quando o lucro de 12 meses passa do resultado operacional, ou fica
   mais de 3 vezes acima da média dos 3 anos anteriores, a empresa recebe alerta e sai das
   oportunidades. Crescimento forte e legítimo também cai nessa regra; o alerta pede conferência.
+- **Preços do pregão:** às 12h30 e 16h (Brasília) entram preços do Yahoo Finanças com 15 min de
+  atraso, marcados como parciais (`cotacoes.parcial = 1`). Fonte não oficial, usada só para preço.
+  À noite o arquivo oficial da B3 substitui esses preços e as linhas parciais são apagadas.
 - Linhas do balanço abaixo do 2º nível não são padronizadas. Capex e dividendos pagos são
   identificados pela descrição da conta, então são aproximações.
 

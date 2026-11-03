@@ -13,6 +13,7 @@
     "resumo": "node --disable-warning=ExperimentalWarning src/resumo.js",
     "calcular": "node --disable-warning=ExperimentalWarning src/calcular.js",
     "exportar": "node --disable-warning=ExperimentalWarning src/exportar.js",
-    "ver": "node src/servir.js"
+    "ver": "node src/servir.js",
+    "intraday": "node --disable-warning=ExperimentalWarning src/atualizar.js --intraday"
   }
 }

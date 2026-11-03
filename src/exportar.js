@@ -70,9 +70,15 @@ export function exportar(db) {
   }
   const cdiDiario = db.prepare("SELECT data, valor FROM macro WHERE serie = 'cdi' ORDER BY data").all().map(r => [r.data, r.valor]);
 
+  // Preços do dia ainda parciais (pregão em andamento): a página avisa e mostra o horário
+  const dataPrecos = empresas[0]?.data ?? null;
+  const temParcial = db.prepare('SELECT count(*) n FROM cotacoes WHERE parcial = 1 AND data = ?').get(dataPrecos).n > 0;
+  const horaParcial = temParcial ? db.prepare("SELECT valor FROM meta WHERE chave = 'intraday_hora'").get()?.valor ?? null : null;
+
   const dados = {
     gerado_em: new Date().toISOString(),
-    data_precos: empresas[0]?.data ?? null,
+    data_precos: dataPrecos,
+    precos_parciais: temParcial ? { hora: horaParcial } : null,
     macro, tesouro, empresas, historico, anuais, etfs, series,
     config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario,
   };
