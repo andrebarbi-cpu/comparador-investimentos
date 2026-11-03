@@ -1,7 +1,0 @@
-{
-  "_leia": "Tickers que a própria empresa preencheu errado no cadastro da CVM (ex.: '000000', código CVM no lugar do ticker). CNPJ -> tickers.",
-  "30.306.294/0001-45": ["BPAC11", "BPAC3", "BPAC5"],
-  "33.042.730/0001-04": ["CSNA3"],
-  "08.902.291/0001-15": ["CMIN3"],
-  "03.853.896/0001-40": ["MBRF3"]
-}

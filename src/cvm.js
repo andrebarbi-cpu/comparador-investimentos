@@ -34,15 +34,16 @@ export async function atualizarCadastro(db, anoFim) {
     const zip = abrirZip(zipArq);
     for (const r of lerCsv(zip.texto(`fca_cia_aberta_valor_mobiliario_${ano}.csv`))) {
       const cod = (r.Codigo_Negociacao ?? '').trim().toUpperCase();
-      if ((r.Mercado && r.Mercado !== 'Bolsa') || !/^[A-Z0-9]{4}\d{1,2}$/.test(cod)) continue;
+      // Ticker começa com letra (B3SA3 tem dígito no meio; o "000000" do BTG não é ticker)
+      if ((r.Mercado && r.Mercado !== 'Bolsa') || !/^[A-Z][A-Z0-9]{3}\d{1,2}$/.test(cod)) continue;
       if (!/^(A[çc][õo]es|Units?)/i.test(r.Valor_Mobiliario ?? '')) continue;
       tickers.set(cod, { cnpj: r.CNPJ_Companhia, classe: classeDe(cod) });
       if (r.Segmento) segmentos.set(r.CNPJ_Companhia, r.Segmento);
     }
   }
-  // Correções manuais para quem preencheu o ticker errado (ex.: BTG com "000000")
-  const extras = JSON.parse(readFileSync(join(RAIZ, 'config', 'tickers_extras.json'), 'utf8'));
-  for (const [cnpj, cods] of Object.entries(extras)) {
+  // Correções manuais para quem preencheu o cadastro errado (ex.: BTG com "000000")
+  const correcoes = JSON.parse(readFileSync(join(RAIZ, 'config', 'correcoes_cadastro.json'), 'utf8'));
+  for (const [cnpj, cods] of Object.entries(correcoes.tickers)) {
     if (cnpj.startsWith('_')) continue;
     for (const cod of cods) tickers.set(cod, { cnpj, classe: classeDe(cod) });
   }
@@ -68,9 +69,12 @@ export async function atualizarCadastro(db, anoFim) {
       setor=excluded.setor, situacao=excluded.situacao, controle=excluded.controle,
       segmento=COALESCE(excluded.segmento, empresas.segmento)`);
     for (const r of porCnpj.values()) {
-      insEmp.run(r.CNPJ_CIA, r.CD_CVM, r.DENOM_COMERC || r.DENOM_SOCIAL, r.SETOR_ATIV || null,
+      const nome = correcoes.nomes[r.CNPJ_CIA] ?? (r.DENOM_COMERC || r.DENOM_SOCIAL);
+      insEmp.run(r.CNPJ_CIA, r.CD_CVM, nome, r.SETOR_ATIV || null,
         r.SIT, r.CONTROLE_ACIONARIO || null, segmentos.get(r.CNPJ_CIA) ?? null);
     }
+    // A lista de ações é refeita a cada vez, para sair o que deixou de existir ou entrou por engano
+    db.exec("DELETE FROM tickers WHERE tipo = 'acao'");
     const insTic = db.prepare(`INSERT INTO tickers (ticker, cnpj, classe, tipo) VALUES (?, ?, ?, 'acao')
       ON CONFLICT(ticker) DO UPDATE SET cnpj=excluded.cnpj, classe=excluded.classe, tipo='acao'`);
     for (const [cod, t] of tickers) insTic.run(cod, t.cnpj, t.classe);
