@@ -110,6 +110,6 @@ podem ser apagados quando quiser.
    ETFs e renda fixa. Estática, sem dependências; lê `site/dados.js`, gerado por `src/exportar.js`.
    A comparação vira imagem PNG (botão "Salvar/Compartilhar como imagem"); a biblioteca
    html-to-image é baixada da jsDelivr só no clique.
-4. **Automação** – `.github/workflows/atualizar.yml` roda todo dia útil às 21h30 e às 8h (Brasília),
+4. **Automação** – `.github/workflows/atualizar.yml` roda todo dia útil às 20h45, 22h30 e 8h (Brasília),
    guarda o banco como anexo da release `banco` e publica `site/` no GitHub Pages. Para rodar na
    hora: aba Actions → Atualizar dados → Run workflow.
