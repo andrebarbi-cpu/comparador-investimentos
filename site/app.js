@@ -299,16 +299,16 @@ function variacao(tk, dias) {
 }
 const campoQtd = (chave, passo = 1) => `<input class="campo qtd" type="number" min="0" step="${passo}" inputmode="decimal"
   data-chave="${esc(chave)}" value="${local.qtd[chave] ?? ''}" placeholder="0" aria-label="Quantidade de ${esc(chave)}">`;
-const situacao = e => {
-  const s = [];
+// Situação de uma ação da carteira: o gatilho pela regra, selos e, embaixo, o que pesa contra a tese
+const situacao = l => {
+  const { e, g } = l, s = [`<span class="selo">${g.st}</span>`];
   if (e?.oportunidade) s.push('<span class="selo">Oportunidade</span>');
-  if (ok(e?.pl_percentil)) s.push(e.pl_percentil <= 25 ? '<span class="selo">↓ Barata vs. histórico</span>'
-    : e.pl_percentil >= 75 ? '<span class="selo">↑ Cara vs. histórico</span>' : '<span class="selo">No padrão</span>');
   if (e?.alertas) {
     const n = e.alertas.split(' | ').length;
     s.push(`<span class="selo" title="${esc(e.alertas)}">⚠ ${n} alerta${n > 1 ? 's' : ''}</span>`);
   }
-  return `<span class="selos">${s.join('')}</span>`;
+  const obs = [g.ehTrade ? 'ação de trade' : '', ...g.tese].filter(Boolean);
+  return `<span class="selos">${s.join('')}</span>${obs.length ? `<span class="tese">${obs.map(esc).join('; ')}</span>` : ''}`;
 };
 
 function montarCarteiras(el) {
@@ -391,7 +391,7 @@ function desenharCarteiras() {
 function linhasAcoes(c) {
   return c.acoes.map(tk => {
     const e = porTicker.get(tk), p = precoAtual(tk) ?? e?.preco, q = local.qtd[tk] ?? 0;
-    return { tk, e, p, q, saldo: q * (p ?? 0), renda: q * (p ?? 0) * (e?.dy ?? 0) };
+    return { tk, e, p, q, saldo: q * (p ?? 0), renda: q * (p ?? 0) * (e?.dy ?? 0), g: gatilhoAcao(tk, e, p) };
   });
 }
 // Colunas da tabela de ações da carteira: rótulo, dica e o valor usado para ordenar
@@ -406,8 +406,10 @@ const COLUNAS_CARTEIRA = [
   { k: 'dy', r: 'Div. 12m', v: l => l.e?.dy, dica: 'Dividendos e JCP pagos nos últimos 12 meses sobre o preço' },
   { k: 'renda', r: 'Renda/ano', v: l => l.renda, dica: 'Quantidade × preço × dividendos dos últimos 12 meses' },
   { k: 'pl', r: 'P/L × mediana', v: l => ok(l.e?.pl) && ok(l.e?.pl_mediana) ? l.e.pl / l.e.pl_mediana : null, dica: 'P/L de hoje × mediana desde 2020; ordena pelo desconto' },
+  { k: 'normal', r: 'Normal', v: l => ok(l.g.normal) ? l.g.normal / l.p - 1 : null, dica: 'Preço com o P/L mediano desde 2020, supondo o lucro de hoje; ordena pela distância até ele' },
+  { k: 'caro', r: 'Caro', v: l => ok(l.g.caro) ? l.g.caro / l.p - 1 : null, dica: 'Preço com o P/L do percentil 75 desde 2020, supondo o lucro de hoje' },
   { k: 'nota', r: 'Nota', v: l => l.e?.nota_geral },
-  { k: 'situacao', r: 'Situação', esq: true, v: l => l.e?.pl_percentil, dica: 'Ordena do mais barato ao mais caro contra o próprio histórico' },
+  { k: 'situacao', r: 'Situação e tese', esq: true, v: l => l.e?.pl_percentil, dica: 'O que a regra manda fazer e o que pesa contra a tese; ordena do mais barato ao mais caro contra o próprio histórico' },
 ];
 const ordemCarteira = {};
 const colunaCarteira = k => COLUNAS_CARTEIRA.find(c => c.k === k);
@@ -418,10 +420,12 @@ function blocoAcoes(c) {
   const aviso = criterios.length ? `<div class="filtros" style="margin:0 0 8px"><span class="contagem" style="margin:0">Ordenando por
     ${esc(descreverCriterios(criterios, k => colunaCarteira(k).r))}${combinado ? ' (posição combinada)' : ''}</span>
     <button class="botao" data-limpar-ordem="${esc(c.id)}">Limpar ordenação</button></div>` : '';
-  return `${aviso}<div class="tabela-caixa" style="max-height:none"><table>
+  return `<p class="tile-sub" style="margin:0 0 8px">Normal é o preço em que o P/L volta à mediana desde 2020; caro, ao percentil 75.
+    Os dois supõem o lucro de hoje. A situação segue as regras de config/carteiras.json: elas apontam o momento, a decisão é de vocês.</p>
+  ${aviso}<div class="tabela-caixa" style="max-height:none"><table>
     <thead><tr>${COLUNAS_CARTEIRA.map(col => `<th data-ordem="${col.k}" class="${col.esq ? 'esq' : ''}"
       ${col.dica ? `title="${esc(col.dica)}"` : ''} ${criterios[0]?.k === col.k ? `aria-sort="${criterios[0].desc ? 'descending' : 'ascending'}"` : ''}>${col.r}${marcaCriterio(criterios, col.k)}</th>`).join('')}${combinado ? '<th>Combinado</th>' : ''}</tr></thead>
-    <tbody>${linhas.map(({ tk, e, p, q, saldo, renda }) => `<tr data-ticker="${esc(tk)}">
+    <tbody>${linhas.map(l => { const { tk, e, p, q, saldo, renda, g } = l; return `<tr data-ticker="${esc(tk)}">
       <td class="esq empresa"><b>${esc(tk)}</b><span class="nome">${esc(e?.nome ?? '')}</span></td>
       <td>${campoQtd(tk)}</td><td>R$ ${num(p, 2)}</td>
       <td class="${classeSinal(variacao(tk, 1))}">${pctSinal(variacao(tk, 1))}</td>
@@ -429,7 +433,8 @@ function blocoAcoes(c) {
       <td>${q ? dinheiro(saldo) : '–'}</td><td>${q && total ? pct(saldo / total, 0) : '–'}</td>
       <td>${pct(e?.dy)}</td><td>${q ? dinheiro(renda) : '–'}</td>
       <td>${ok(e?.pl) && ok(e?.pl_mediana) ? `${num(e.pl)} <span class="setor">× ${num(e.pl_mediana)}</span>` : '–'}</td>
-      <td>${medidor(e?.nota_geral)}</td><td class="esq">${situacao(e)}</td>${combinado ? `<td>${medidor(combinado.get(linhas.find(l => l.tk === tk)))}</td>` : ''}</tr>`).join('')}</tbody>
+      <td>${celulaAlvo(g.normal, p)}</td><td>${celulaAlvo(g.caro, p)}</td>
+      <td>${medidor(e?.nota_geral)}</td><td class="esq situacao">${situacao(l)}</td>${combinado ? `<td>${medidor(combinado.get(l))}</td>` : ''}</tr>`; }).join('')}</tbody>
   </table></div>
   ${alertasCarteira(linhas)}`;
 }
@@ -629,7 +634,6 @@ function blocoGatilhos(c) {
   if (c.faixas) partes.push(gatilhosFaixas(c));
   for (const t of c.tesouro ?? []) partes.push(gatilhoTesouro(t));
   if (c.etfs?.includes('IVVB11')) partes.push(gatilhoDolar(c));
-  if (c.acoes?.length) partes.push(gatilhosAcoes(c));
   const corpo = partes.filter(Boolean).join('');
   return corpo ? `<div class="grafico-bloco" style="margin-bottom:12px"><h3>Gatilhos de compra e venda</h3>
     <div class="tile-sub">Regras que vocês definiram (config/carteiras.json). Elas apontam o momento; a decisão é de vocês.</div>${corpo}</div>` : '';
@@ -706,41 +710,31 @@ function gatilhoDolar(c) {
       ${dolarExpressivo || pesoExpressivo ? 'Vender o excesso do IVVB11 e comprar o que caiu é "vender na alta e comprar na queda" num movimento só (ETF paga 15% de IR sobre o lucro).' : 'Até lá, aportes novos resolvem sem pagar IR.'}</p>`;
 }
 
-function gatilhosAcoes(c) {
-  const pisos = REGRAS.roe_minimo ?? {}, trade = new Set(REGRAS.trade ?? []);
-  const linhas = c.acoes.filter(tk => !local.soTenho || local.qtd[tk] > 0).map(tk => {
-    const e = porTicker.get(tk), p = precoAtual(tk) ?? e?.preco;
-    if (!e || !ok(e.pl) || e.pl <= 0) return `<tr style="cursor:default"><td class="esq"><b>${esc(tk)}</b></td><td colspan="5" class="vazio esq">Sem lucro positivo: sem faixa de P/L.</td></tr>`;
-    // P/L muito acima do próprio "caro" quase sempre é lucro que despencou (prejuízo pontual), não preço alto
-    if (ok(e.pl_p75) && e.pl > 2 * e.pl_p75) {
-      return `<tr data-ticker="${esc(tk)}"><td class="esq"><b>${esc(tk)}</b></td><td>R$ ${num(p, 2)}</td><td colspan="2" class="vazio">–</td>
-        <td class="esq">${selo('P/L distorcido: o lucro de 12 meses despencou')}</td>
-        <td class="esq" style="white-space:normal;min-width:180px">P/L ${num(e.pl)} contra ${num(e.pl_p75)} no caro histórico; a regra de preço não serve até o lucro normalizar. Avaliar pela tese${e.alertas ? ` (${e.alertas.split(' | ').length} alerta(s) na ficha)` : ''}.</td></tr>`;
-    }
-    const alvo = x => ok(x) ? p * x / e.pl : null;
-    const ehTrade = trade.has(tk);
-    const piso = pisos[e.setor] ?? pisos.padrao;
-    const tese = [];
-    if (ok(piso) && ok(e.roe) && e.roe < piso) tese.push(`ROE ${pct(e.roe, 0)} abaixo do piso de ${pct(piso, 0)}`);
-    if (ok(e.dy_3a) && ok(e.dy) && e.dy < 0.5 * e.dy_3a) tese.push('dividendo caiu à metade do normal');
-    if (e.payout > 1) tese.push(`pagou mais do que lucrou (payout ${pct(e.payout, 0)}): conte com dividendo menor`);
-    if (e.lucro_suspeito) tese.push('lucro com sinal de não recorrente');
-    if (e.alertas) tese.push(`${e.alertas.split(' | ').length} alerta(s) na ficha`);
-    const quebrada = tese.some(t => t.startsWith('ROE') || t.startsWith('dividendo caiu'));
-    let st;
-    if (e.pl >= e.pl_p75) st = ehTrade ? '↑ Cara: realizar o restante' : (e.dy < (e.dy_mediana ?? 0) ? '↑ Cara e com dividendo abaixo do normal: reduzir' : '↑ Cara: parar de aportar');
-    else if (e.pl >= e.pl_mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
-    else if (e.pl <= e.pl_p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes' : '↓ Em promoção com lucro intacto';
-    else st = 'Abaixo do normal: segurar';
-    return `<tr data-ticker="${esc(tk)}"><td class="esq"><b>${esc(tk)}</b><span class="nome">${ehTrade ? 'trade' : 'dividendo'}</span></td>
-      <td>R$ ${num(p, 2)}</td><td>R$ ${num(alvo(e.pl_mediana), 2)}</td><td>R$ ${num(alvo(e.pl_p75), 2)}</td>
-      <td class="esq">${selo(st)}</td><td class="esq" style="white-space:normal;min-width:180px">${tese.length ? tese.map(esc).join('; ') : '<span class="vazio">nada</span>'}</td></tr>`;
-  }).join('');
-  return `<h3 style="margin-top:12px">Ações: quando realizar e quando a tese quebra</h3>
-    <div class="tile-sub">"Normal" é o preço com o P/L mediano desde 2020; "caro" é o percentil 75. Os alvos supõem o lucro de hoje.</div>
-    <div style="overflow-x:auto"><table><thead><tr><th class="esq">Ação</th><th>Preço</th><th>Normal</th><th>Caro</th><th class="esq">Situação</th><th class="esq">Tese</th></tr></thead>
-    <tbody>${linhas}</tbody></table></div>`;
+// Gatilho de uma ação da carteira: preços "normal" (P/L mediano desde 2020) e "caro" (percentil 75)
+// supondo o lucro de hoje, o que fazer pela regra e o que pode estar quebrando a tese.
+function gatilhoAcao(tk, e, p) {
+  const pisos = REGRAS.roe_minimo ?? {}, ehTrade = (REGRAS.trade ?? []).includes(tk);
+  if (!e || !ok(e.pl) || e.pl <= 0 || !ok(p)) return { st: 'Sem lucro positivo: sem faixa de P/L', tese: [], ehTrade };
+  // P/L muito acima do próprio "caro" quase sempre é lucro que despencou (prejuízo pontual), não preço alto
+  if (ok(e.pl_p75) && e.pl > 2 * e.pl_p75) return { st: 'P/L distorcido: o lucro de 12 meses despencou', ehTrade,
+    tese: [`P/L ${num(e.pl)} contra ${num(e.pl_p75)} no caro histórico; a regra de preço não serve até o lucro normalizar`] };
+  const alvo = x => ok(x) ? p * x / e.pl : null;
+  const piso = pisos[e.setor] ?? pisos.padrao;
+  const tese = [];
+  if (ok(piso) && ok(e.roe) && e.roe < piso) tese.push(`ROE ${pct(e.roe, 0)} abaixo do piso de ${pct(piso, 0)}`);
+  if (ok(e.dy_3a) && ok(e.dy) && e.dy < 0.5 * e.dy_3a) tese.push('dividendo caiu à metade do normal');
+  if (e.payout > 1) tese.push(`pagou mais do que lucrou (payout ${pct(e.payout, 0)}): conte com dividendo menor`);
+  if (e.lucro_suspeito) tese.push('lucro com sinal de não recorrente');
+  const quebrada = tese.some(t => t.startsWith('ROE') || t.startsWith('dividendo caiu'));
+  let st;
+  if (e.pl >= e.pl_p75) st = ehTrade ? '↑ Cara: realizar o restante' : (e.dy < (e.dy_mediana ?? 0) ? '↑ Cara e com dividendo abaixo do normal: reduzir' : '↑ Cara: parar de aportar');
+  else if (e.pl >= e.pl_mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
+  else if (e.pl <= e.pl_p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes' : '↓ Em promoção com lucro intacto';
+  else st = 'Abaixo do normal: segurar';
+  return { normal: alvo(e.pl_mediana), caro: alvo(e.pl_p75), st, tese, ehTrade };
 }
+// Preço-alvo com a distância do preço de hoje
+const celulaAlvo = (alvo, p) => ok(alvo) ? `R$ ${num(alvo, 2)}<span class="nome" style="display:block">${Math.abs(alvo / p - 1) < 0.005 ? 'no preço' : pctSinal(alvo / p - 1, 0)}</span>` : '–';
 
 // Fatia de cada setor no saldo. Bancos, seguradoras e holdings financeiras contam juntos,
 // porque o risco é o mesmo (juros, crédito, política). ETF, Tesouro e CDB aparecem como classes.

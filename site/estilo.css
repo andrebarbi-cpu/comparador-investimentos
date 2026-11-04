@@ -318,6 +318,9 @@ dl.lista dd { margin: 0; text-align: right; font-weight: 600; }
 .agenda[open] summary { margin-bottom: 6px; }
 /* ticker com uma descrição embaixo, em qualquer tabela */
 td > b + .nome, td > b + span.nome { display: block; }
+td.situacao { min-width: 260px; white-space: normal; }
+td.situacao .selos { flex-wrap: wrap; }
+td.situacao .tese { display: block; margin-top: 4px; font-size: .76rem; color: var(--texto-2); line-height: 1.35; }
 .carteira-topo { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin: 8px 0 10px; }
 .carteira-topo label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 
