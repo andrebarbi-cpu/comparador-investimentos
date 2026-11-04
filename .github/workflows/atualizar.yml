@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 40
     environment:
       name: github-pages
-      url: ${{ steps.publicar.outputs.page_url }}
+      url: ${{ steps.publicar.outputs.page_url || steps.publicar2.outputs.page_url }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -100,7 +100,18 @@ jobs:
         with:
           path: site
 
+      # A publicação às vezes falha por instabilidade do GitHub ("Fetching artifact metadata failed");
+      # espera e tenta de novo antes de dar a execução como falha
       - id: publicar
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+
+      - name: Esperar antes de tentar publicar de novo
+        if: steps.publicar.outcome == 'failure'
+        run: sleep 60
+
+      - id: publicar2
+        if: steps.publicar.outcome == 'failure'
         uses: actions/deploy-pages@v4
 
       # Alguma fonte falhou: os dados que deram certo já foram salvos e publicados,
