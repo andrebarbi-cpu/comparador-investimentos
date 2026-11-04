@@ -57,7 +57,8 @@ if (intraday) {
   await etapa('Tesouro', () => atualizarTesouro(db, ANO_INICIO));
   // Pregão em andamento: junta os preços parciais do dia (fora do pregão não grava nada). Sem isso,
   // uma atualização completa rodada à tarde publicaria o site com os preços de ontem.
-  await etapa('preços do pregão', () => atualizarIntraday(db));
+  // Falha aqui não deixa a execução vermelha: o preço oficial já foi atualizado acima.
+  try { await atualizarIntraday(db); } catch (e) { log('Preços do pregão indisponíveis agora:', e.message); }
 }
 // Recalcula indicadores e notas com o que foi coletado (mesmo que alguma fonte tenha falhado)
 await etapa('cálculo', () => calcular(db));
