@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS fundamentos (
   ativo_total REAL, ativo_circ REAL, caixa REAL,
   passivo_circ REAL, divida_cp REAL, divida_lp REAL,
   pl REAL, pl_contr REAL,
-  acoes_on REAL, acoes_pn REAL,
+  acoes_on REAL, acoes_pn REAL,            -- descontadas as em tesouraria
+  acoes_on_bruto REAL, acoes_pn_bruto REAL, -- com tesouraria (comparáveis ao Formulário de Referência)
   PRIMARY KEY (cnpj, dt_refer, tipo)
 );
 
@@ -56,6 +57,17 @@ CREATE TABLE IF NOT EXISTS cotacoes (
   parcial INTEGER,      -- 1 = preço durante o pregão (não oficial), trocado à noite pelo fechamento
   PRIMARY KEY (ticker, data)
 ) WITHOUT ROWID;
+
+-- Quantidade de ações do Formulário de Referência (FRE), que a empresa reenvia poucos dias depois de
+-- mudar o capital (aumento, bonificação, desdobramento). Serve para corrigir a quantidade entre um
+-- balanço trimestral e o seguinte. Só a versão mais recente de cada empresa.
+CREATE TABLE IF NOT EXISTS capital_fre (
+  cnpj TEXT PRIMARY KEY,
+  versao INTEGER,
+  dt_receb TEXT,
+  acoes_on REAL,
+  acoes_pn REAL
+);
 
 -- Pequenos valores de controle (ex.: horário da última cotação parcial)
 CREATE TABLE IF NOT EXISTS meta (
@@ -105,6 +117,7 @@ export function abrirDb() {
   // Colunas acrescentadas depois da primeira versão do banco
   const colunas = db.prepare('PRAGMA table_info(fundamentos)').all().map(c => c.name);
   if (!colunas.includes('equivalencia')) db.exec('ALTER TABLE fundamentos ADD COLUMN equivalencia REAL');
+  if (!colunas.includes('acoes_on_bruto')) db.exec('ALTER TABLE fundamentos ADD COLUMN acoes_on_bruto REAL; ALTER TABLE fundamentos ADD COLUMN acoes_pn_bruto REAL');
   const colTesouro = db.prepare('PRAGMA table_info(tesouro)').all().map(c => c.name);
   if (!colTesouro.includes('pu')) db.exec('ALTER TABLE tesouro ADD COLUMN pu REAL');
   const colCotacoes = db.prepare('PRAGMA table_info(cotacoes)').all().map(c => c.name);

@@ -696,7 +696,8 @@ function abrirFicha(ticker) {
       <div class="grafico-bloco"><h3>Dividendos e JCP pagos por ano</h3><div class="tile-sub">Pela demonstração de fluxo de caixa</div><div class="grafico" id="g-div"></div></div>
       ${fin ? '' : `<div class="grafico-bloco"><h3>Dívida líquida por ano</h3><div class="tile-sub">Negativa = mais caixa que dívida</div><div class="grafico" id="g-divida"></div></div>`}
     </div>
-    <p class="tile-sub">Balanço mais recente: ${data(e.dt_balanco)} · preços de ${data(e.data)} · CNPJ ${esc(e.cnpj)}</p>`;
+    <p class="tile-sub">Balanço mais recente: ${data(e.dt_balanco)} · preços de ${data(e.data)} · CNPJ ${esc(e.cnpj)}</p>
+    ${e.acoes_fre ? `<p class="tile-sub">${esc(e.acoes_fre)}. O valor de mercado e os múltiplos já usam a quantidade nova.</p>` : ''}`;
   fundo.hidden = false;
   document.body.style.overflow = 'hidden';
   $('.fechar', ficha).addEventListener('click', () => irPara(abaAtual));

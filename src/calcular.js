@@ -92,6 +92,7 @@ export function calcular(db) {
   const empresas = db.prepare(`SELECT e.cnpj, e.nome, e.setor, e.segmento, e.controle, group_concat(t.ticker) tks
     FROM empresas e JOIN tickers t ON t.cnpj = e.cnpj AND t.tipo = 'acao' GROUP BY e.cnpj`).all();
   const fundStmt = db.prepare('SELECT * FROM fundamentos WHERE cnpj = ? ORDER BY dt_refer, tipo');
+  const capitalFre = new Map(db.prepare('SELECT * FROM capital_fre').all().map(r => [r.cnpj, r]));
 
   const historico = [];
   const fotos = [];
@@ -117,6 +118,7 @@ export function calcular(db) {
     };
     const linhaTempoAcoes = montarLinhaTempoAcoes(regs, precoClasses, on.v.length >= pn.v.length ? on : pn);
     if (!linhaTempoAcoes.length) continue;
+    const ajusteFre = ajustarPeloFre(linhaTempoAcoes, regs, capitalFre.get(emp.cnpj), on.v.length >= pn.v.length ? on : pn);
     const acoesEm = data => {
       let seg = linhaTempoAcoes[0];
       for (const s of linhaTempoAcoes) if (s.desde <= data) seg = s;
@@ -205,7 +207,8 @@ export function calcular(db) {
     // que a quantidade de ações ainda não reflete. Quedas reais (ex.: 26/10/2026, -14% no Ibovespa) não batem.
     const serieRef = on.v.length >= pn.v.length ? on : pn;
     const ultimoBalanco = regs.filter(r => r.acoes_on != null).at(-1)?.dt_refer;
-    for (let i = indiceAte(serieRef.d, ultimoBalanco) + 1; i > 0 && i < serieRef.d.length; i++) {
+    // Se o Formulário de Referência já trouxe a nova quantidade de ações, não há o que alertar
+    for (let i = indiceAte(serieRef.d, ultimoBalanco) + 1; !ajusteFre && i > 0 && i < serieRef.d.length; i++) {
       if (pareceEventoSocietario(serieRef.p[i] / serieRef.p[i - 1])) {
         alertas.push(`Preço variou ${Math.round(100 * (serieRef.p[i] / serieRef.p[i - 1] - 1))}% em ${serieRef.d[i]}: possível desdobramento/grupamento, múltiplos podem estar distorcidos até o próximo balanço`);
         break;
@@ -282,6 +285,7 @@ export function calcular(db) {
       lucro_suspeito: lucroSuspeito ? 1 : 0,
       elegivel: liquidez >= LIQUIDEZ_MINIMA && !desatualizado && t.lucro_contr != null ? 1 : 0,
       alertas: alertas.join(' | '),
+      acoes_fre: ajusteFre?.texto ?? null,
     });
   }
 
@@ -367,6 +371,43 @@ function montarLinhaTempoAcoes(regs, precoClasses, serieRef) {
     linha.push(seg);
   }
   return linha;
+}
+
+// Aumento de capital, bonificação ou desdobramento depois do último balanço: a quantidade nova vem
+// do Formulário de Referência (FRE). Compara com o total bruto do balanço (o FRE não desconta
+// tesouraria; algumas empresas já informam o balanço sem ela) e aplica a variação a partir da data
+// de entrega do FRE. Variação acima de 30% só vale se o preço confirmar desdobramento/grupamento.
+function ajustarPeloFre(linha, regs, fre, serieRef) {
+  const ult = regs.filter(r => r.acoes_on_bruto != null).at(-1);
+  if (!fre || !ult || fre.dt_receb <= ult.dt_refer) return null;
+  const bruto = ult.acoes_on_bruto + ult.acoes_pn_bruto;
+  const tesouraria = bruto - (ult.acoes_on + ult.acoes_pn);
+  const totalFre = fre.acoes_on + fre.acoes_pn;
+  if (!(bruto > 0) || !(totalFre > 0)) return null;
+  // Unidades: há empresas que informam o balanço em milhares e o FRE em unidades
+  const q0 = totalFre / bruto;
+  const escala = q0 > 500 && q0 < 2000 ? 1000 : q0 > 0.0005 && q0 < 0.002 ? 0.001 : 1;
+  const igual = base => Math.abs(totalFre / (base * escala) - 1) < 0.001;
+  if (igual(bruto) || igual(bruto + tesouraria)) return null;
+  const q = totalFre / (bruto * escala);
+  if (Math.abs(q - 1) > 0.3) {
+    // Mudança grande: só se houve salto de preço compatível depois do balanço
+    const ini = indiceAte(serieRef.d, ult.dt_refer) + 1;
+    let confirmado = false;
+    for (let i = Math.max(ini, 1); i < serieRef.d.length; i++) {
+      if (Math.abs(Math.log(serieRef.p[i] / serieRef.p[i - 1]) + Math.log(q)) < 0.1) { confirmado = true; break; }
+    }
+    if (!confirmado) return null;
+  }
+  const ant = linha.at(-1);
+  const fator = (frePorClasse, brutoClasse) => brutoClasse > 0 && frePorClasse > 0 ? frePorClasse / (brutoClasse * escala) : q;
+  linha.push({
+    desde: fre.dt_receb,
+    on: ant.on * fator(fre.acoes_on, ult.acoes_on_bruto),
+    pn: ant.pn * fator(fre.acoes_pn, ult.acoes_pn_bruto),
+  });
+  const variacao = Math.round(1000 * (q - 1)) / 10;
+  return { q, texto: `Quantidade de ações atualizada pelo Formulário de Referência entregue em ${fre.dt_receb.split('-').reverse().join('/')} (${variacao > 0 ? '+' : ''}${br(variacao, 1)}% desde o balanço de ${ult.dt_refer.split('-').reverse().join('/')})` };
 }
 
 // Percentil (0 a 100) de cada valor dentro do grupo. maiorMelhor=false inverte.

@@ -50,6 +50,10 @@ podem ser apagados quando quiser.
 - **Desdobramentos e grupamentos:** a cotação da B3 não é ajustada. Entre dois balanços o evento
   é localizado pelo salto de preço; depois do último balanço ele só gera alerta, e os múltiplos
   ficam distorcidos até o balanço seguinte.
+- **Ações novas entre balanços** (aumento de capital, bonificação, recompra): vêm do Formulário de
+  Referência, que a empresa reenvia dias depois da mudança. Variação de até 30% é aplicada a partir
+  da entrega do FRE; acima disso, só se o preço confirmar desdobramento/grupamento. A ficha da
+  empresa avisa quando a quantidade foi corrigida assim (ex.: Bradesco +5,7% em out/2026).
 - **Histórico de múltiplos começa em 2020:** antes disso a CVM não publica a quantidade de ações.
 - **26/10/2026:** o Ibovespa caiu ~14% num dia (circuit breaker após o 2º turno). O P/L de hoje
   ainda usa lucros de antes do choque, então "barato contra o histórico" pode ser só o mercado

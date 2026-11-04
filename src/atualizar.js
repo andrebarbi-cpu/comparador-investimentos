@@ -3,7 +3,7 @@
 //   npm run atualizar       -> rotina diária: só o que mudou desde a última execução
 //   npm run intraday        -> preços durante o pregão (parciais, trocados à noite pelo oficial)
 import { abrirDb } from './db.js';
-import { atualizarCadastro, atualizarDemonstracoes } from './cvm.js';
+import { atualizarCadastro, atualizarDemonstracoes, atualizarCapitalFre } from './cvm.js';
 import { carregarAno, atualizarDiario } from './b3.js';
 import { atualizarBcb, atualizarTesouro } from './macro.js';
 import { calcular } from './calcular.js';
@@ -46,6 +46,8 @@ if (intraday) {
     }
     await etapa('cotações', () => atualizarDiario(db));
   }
+  // Aumentos de capital, bonificações e desdobramentos que ainda não chegaram ao balanço
+  await etapa('Formulário de Referência', () => atualizarCapitalFre(db, ano));
   await etapa('Banco Central', () => atualizarBcb(db, ANO_INICIO));
   await etapa('Tesouro', () => atualizarTesouro(db, ANO_INICIO));
 }

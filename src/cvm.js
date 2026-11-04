@@ -82,6 +82,34 @@ export async function atualizarCadastro(db, anoFim) {
   log(`Cadastro: ${porCnpj.size} empresas, ${tickers.size} tickers de ações (${herdados} pelo prefixo)`);
 }
 
+// ---------- Formulário de Referência (quantidade de ações entre balanços) ----------
+
+// Guarda a quantidade de ações integralizadas da versão mais recente do FRE de cada empresa.
+// O arquivo aberto da CVM só traz a última versão; o ano anterior entra primeiro e o atual por cima.
+export async function atualizarCapitalFre(db, anoFim) {
+  const ins = db.prepare(`INSERT OR REPLACE INTO capital_fre (cnpj, versao, dt_receb, acoes_on, acoes_pn) VALUES (?, ?, ?, ?, ?)`);
+  let n = 0;
+  for (const ano of [anoFim - 1, anoFim]) {
+    const url = `${BASE}/DOC/FRE/DADOS/fre_cia_aberta_${ano}.zip`;
+    const arq = await baixar(url, `cvm/fre_cia_aberta_${ano}.zip`, { forcar: ano === anoFim });
+    if (!arq) continue;
+    const zip = abrirZip(arq);
+    const recebido = new Map();
+    for (const r of lerCsv(zip.texto(`fre_cia_aberta_${ano}.csv`))) recebido.set(`${r.CNPJ_CIA}|${r.VERSAO}`, r.DT_RECEB);
+    transacao(db, () => {
+      for (const r of lerCsv(zip.texto(`fre_cia_aberta_capital_social_${ano}.csv`))) {
+        if (r.Tipo_Capital !== 'Capital Integralizado') continue;
+        const on = Number(r.Quantidade_Acoes_Ordinarias) || 0, pn = Number(r.Quantidade_Acoes_Preferenciais) || 0;
+        const dt = recebido.get(`${r.CNPJ_Companhia}|${r.Versao}`);
+        if (!(on + pn > 0) || !dt) continue;
+        ins.run(r.CNPJ_Companhia, Number(r.Versao), dt, on, pn);
+        n++;
+      }
+    });
+  }
+  log(`Formulário de Referência: quantidade de ações de ${n} empresas`);
+}
+
 // ---------- Demonstrações financeiras ----------
 
 const DEMONSTRACOES = ['BPA', 'BPP', 'DRE', 'DFC_MI', 'DFC_MD', 'DVA'];
@@ -138,14 +166,18 @@ export async function atualizarDemonstracoes(db, tipo, ano, { soSeMudou = false 
     rec.acoes = {
       on: n('QT_ACAO_ORDIN_CAP_INTEGR') - n('QT_ACAO_ORDIN_TESOURO'),
       pn: n('QT_ACAO_PREF_CAP_INTEGR') - n('QT_ACAO_PREF_TESOURO'),
+      // Brutas (com tesouraria): comparáveis ao Formulário de Referência, que não desconta tesouraria
+      brutoOn: n('QT_ACAO_ORDIN_CAP_INTEGR'),
+      brutoPn: n('QT_ACAO_PREF_CAP_INTEGR'),
     };
   }
 
   // 4) Extrai os campos padronizados e grava
   const ins = db.prepare(`INSERT OR REPLACE INTO fundamentos (cnpj, dt_refer, tipo, dt_ini, dt_receb, versao,
     consolidado, receita, lucro_bruto, ebit, equivalencia, da, lucro_liq, lucro_contr, fco, fci, fcf, capex, dividendos_pagos,
-    ativo_total, ativo_circ, caixa, passivo_circ, divida_cp, divida_lp, pl, pl_contr, acoes_on, acoes_pn)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    ativo_total, ativo_circ, caixa, passivo_circ, divida_cp, divida_lp, pl, pl_contr, acoes_on, acoes_pn,
+    acoes_on_bruto, acoes_pn_bruto)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   let gravados = 0;
   transacao(db, () => {
     for (const rec of recs.values()) {
@@ -158,7 +190,8 @@ export async function atualizarDemonstracoes(db, tipo, ano, { soSeMudou = false 
       ins.run(rec.cnpj, rec.dt_refer, tipo, f.dt_ini, rec.dt_receb, rec.versao, temCon ? 1 : 0,
         f.receita, f.lucro_bruto, f.ebit, f.equivalencia, f.da, f.lucro_liq, f.lucro_contr, f.fco, f.fci, f.fcf, f.capex,
         f.dividendos_pagos, f.ativo_total, f.ativo_circ, f.caixa, f.passivo_circ, f.divida_cp, f.divida_lp,
-        f.pl, f.pl_contr, rec.acoes?.on ?? null, rec.acoes?.pn ?? null);
+        f.pl, f.pl_contr, rec.acoes?.on ?? null, rec.acoes?.pn ?? null,
+        rec.acoes?.brutoOn ?? null, rec.acoes?.brutoPn ?? null);
       gravados++;
     }
   });
