@@ -113,6 +113,23 @@ export function exportar(db) {
   const temParcial = db.prepare('SELECT count(*) n FROM cotacoes WHERE parcial = 1 AND data = ?').get(dataPrecos).n > 0;
   const horaParcial = temParcial ? db.prepare("SELECT valor FROM meta WHERE chave = 'intraday_hora'").get()?.valor ?? null : null;
 
+  // Durante o pregão, o último fechamento oficial de cada código, para a página poder alternar entre
+  // "pregão de hoje (parcial)" e "fechamento oficial": { data, precos: { código: [preço, variação do dia, data] } }
+  let oficial = null;
+  if (temParcial) {
+    const dataOficial = db.prepare("SELECT max(data) d FROM cotacoes WHERE ticker = 'BOVA11' AND parcial IS NULL").get().d;
+    const ultimos = db.prepare('SELECT data, fechamento FROM cotacoes WHERE ticker = ? AND parcial IS NULL AND data <= ? ORDER BY data DESC LIMIT 2');
+    const codigos = new Set([...empresas.flatMap(e => e.tickers.split(' ')), ...etfs.map(e => e.ticker), ...acompanhados]);
+    const precosOficiais = {};
+    for (const tk of codigos) {
+      const [u, a] = ultimos.all(tk, dataOficial);
+      if (!u) continue;
+      // Sem negócio no dia do fechamento: não variou
+      precosOficiais[tk] = [u.fechamento, u.data === dataOficial && a ? arred(u.fechamento / a.fechamento - 1) : 0, u.data];
+    }
+    oficial = { data: dataOficial, precos: precosOficiais };
+  }
+
   // Arquivos por ativo e, de cada código (inclusive os secundários, como ALUP4 e ALUP3), o último
   // preço e as variações do dia e de 12 meses: a página do ativo usa o preço do código aberto
   const tickers = exportarAtivos(db, empresas);
@@ -122,7 +139,7 @@ export function exportar(db) {
     data_precos: dataPrecos,
     precos_parciais: temParcial ? { hora: horaParcial } : null,
     macro, tesouro, empresas, historico, anuais, etfs, series,
-    config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario, trimestres, tickers,
+    config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario, trimestres, tickers, oficial,
   };
   mkdirSync(join(RAIZ, 'site'), { recursive: true });
   const texto = `window.DADOS = ${JSON.stringify(dados)};\n`;

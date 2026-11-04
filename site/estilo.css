@@ -161,6 +161,8 @@ button, input, select { font: inherit; color: inherit; }
 .contexto > span { background: var(--superficie); border: 1px solid var(--linha); border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
 .contexto b { color: var(--texto); font-weight: 600; }
 body[data-aba="inicio"] .contexto { display: none; }
+.modo-precos .segmentado button { font-size: .8rem; padding: 5px 10px; white-space: nowrap; }
+.modo-precos[hidden] { display: none; }
 
 main { padding: 24px 28px 40px; max-width: 1320px; }
 .aba { display: none; }

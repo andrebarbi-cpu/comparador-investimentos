@@ -2,6 +2,49 @@
 // Comparador de Investimentos: página estática que lê window.DADOS (gerado por src/exportar.js).
 
 const D = window.DADOS;
+
+// ---------- Pregão de hoje ou fechamento oficial ----------
+// Durante o pregão os dados trazem o preço parcial (15 min de atraso) e, em D.oficial, o último
+// fechamento oficial. A escolha fica salva no aparelho; no modo oficial os números que dependem do
+// preço (P/L, P/VP, dividend yield, margens de Graham e Bazin) são refeitos com o preço do fechamento.
+const CHAVE_MODO_PRECOS = 'comparador.precos';
+const PARCIAL = D.precos_parciais;
+let modoPrecos = 'agora';
+try { if (D.oficial && localStorage.getItem(CHAVE_MODO_PRECOS) === 'oficial') modoPrecos = 'oficial'; } catch { /* sem armazenamento */ }
+if (modoPrecos === 'oficial') aplicarFechamentoOficial();
+function aplicarFechamentoOficial() {
+  const O = D.oficial.precos;
+  for (const e of D.empresas) {
+    const o = O[e.ticker];
+    if (!o || !(e.preco > 0)) continue;
+    const f = o[0] / e.preco;
+    if (typeof e.ev === 'number' && typeof e.vm === 'number') {
+      const ev = e.ev + e.vm * (f - 1);
+      if (e.ev > 0) { if (e.ev_ebit != null) e.ev_ebit *= ev / e.ev; if (e.ev_ebitda != null) e.ev_ebitda *= ev / e.ev; }
+      e.ev = ev;
+    }
+    for (const k of ['vm', 'pl', 'pvp']) if (typeof e[k] === 'number') e[k] *= f;
+    for (const k of ['dy', 'dy_3a', 'earnings_yield', 'ebit_ev']) if (typeof e[k] === 'number') e[k] /= f;
+    for (const k of ['graham_margem', 'bazin_margem']) if (typeof e[k] === 'number') e[k] = (1 + e[k]) / f - 1;
+    if (typeof e.variacao_12m === 'number') e.variacao_12m = (1 + e.variacao_12m) * f - 1;
+    if (typeof e.earnings_yield === 'number' && typeof e.tesouro_ipca_ref === 'number') e.premio_vs_tesouro = e.earnings_yield - e.tesouro_ipca_ref / 100;
+    e.preco = o[0]; e.var_dia = o[1]; e.data = D.oficial.data;
+  }
+  for (const x of D.etfs) {
+    const o = O[x.ticker];
+    if (!o || !(x.preco > 0)) continue;
+    const f = o[0] / x.preco;
+    for (const k of ['ret_1m', 'ret_12m']) if (typeof x[k] === 'number') x[k] = (1 + x[k]) * f - 1;
+    x.preco = o[0]; x.var_dia = o[1];
+  }
+  for (const tk of Object.keys(D.precos ?? {})) if (D.precos[tk].at(-1)?.[0] === D.data_precos) D.precos[tk].pop();
+  for (const [tk, t] of Object.entries(D.tickers ?? {})) {
+    const o = O[tk];
+    if (o) D.tickers[tk] = [o[0], o[1], t[2] != null ? (1 + t[2]) * o[0] / t[0] - 1 : null, o[2]];
+  }
+  D.data_precos = D.oficial.data;
+  D.precos_parciais = null;
+}
 const $ = (sel, raiz = document) => raiz.querySelector(sel);
 
 // ---------- Formatação ----------
@@ -45,9 +88,10 @@ const etf = Object.fromEntries(D.etfs.map(e => [e.ticker, e]));
 const ipcaRef = D.empresas.find(e => ok(e.tesouro_ipca_ref))?.tesouro_ipca_ref;
 
 // "29/10/2026" no fechamento oficial; "03/11/2026 às 15:27 (parcial)" durante o pregão
-const horaParcial = D.precos_parciais?.hora
-  ? new Date(D.precos_parciais.hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : null;
-const rotuloPrecos = () => D.precos_parciais ? `${data(D.data_precos)} às ${horaParcial ?? '?'} (parcial)` : data(D.data_precos);
+const horaParcial = PARCIAL?.hora
+  ? new Date(PARCIAL.hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : null;
+const rotuloPrecos = () => D.precos_parciais ? `${data(D.data_precos)} às ${horaParcial ?? '?'} (parcial)`
+  : modoPrecos === 'oficial' ? `${data(D.data_precos)} (fechamento oficial)` : data(D.data_precos);
 
 // ---------- Tema claro/escuro ----------
 // Sem escolha salva, segue o sistema. Os gráficos usam variáveis de cor, então trocam junto.
@@ -82,6 +126,19 @@ function montarTopo() {
   if (ok(ipcaRef)) itens.push(`Tesouro IPCA+ ~10 anos <b>IPCA + ${num(ipcaRef, 2)}%</b>`);
   if (m.dolar) itens.push(`Dólar <b>R$ ${num(m.dolar.valor, 2)}</b>`);
   $('#contexto').innerHTML = itens.map(i => `<span>${i}</span>`).join('');
+  // Pregão em andamento: escolha entre o preço de agora (parcial) e o último fechamento oficial
+  if (D.oficial) {
+    const el = $('#modo-precos');
+    el.hidden = false;
+    el.innerHTML = `<span class="segmentado" role="group" aria-label="Quais preços usar">
+      <button data-modo-precos="agora" aria-pressed="${modoPrecos === 'agora'}" title="Preço do pregão em andamento, com 15 minutos de atraso">Pregão de hoje · ${horaParcial ?? 'parcial'}</button>
+      <button data-modo-precos="oficial" aria-pressed="${modoPrecos === 'oficial'}" title="Último fechamento oficial da B3">Fechamento de ${data(D.oficial.data).slice(0, 5)}</button></span>`;
+    for (const b of el.querySelectorAll('[data-modo-precos]')) b.addEventListener('click', () => {
+      if (b.dataset.modoPrecos === modoPrecos) return;
+      try { localStorage.setItem(CHAVE_MODO_PRECOS, b.dataset.modoPrecos); } catch { /* vale só nesta visita */ }
+      location.reload();
+    });
+  }
   montarBusca();
   // Altura do topo fixo: o menu de seções da página do ativo gruda logo abaixo dele
   new ResizeObserver(() => document.documentElement.style.setProperty('--topo-altura', `${$('.topo').offsetHeight}px`)).observe($('.topo'));
@@ -281,7 +338,7 @@ function itensAtencao(c) {
     if (g.st.startsWith('↑')) itens.push({ tipo: 'venda', ordem: 1, tk, tkLogo: e?.ticker, rotulo: 'Realizar', titulo: `${tk}: ${g.st.slice(2)}`,
       texto: `Preço R$ ${num(p, 2)}; caro a partir de R$ ${num(g.caro, 2)}${tem(tk) ? ' · você tem' : ''}`, href: `empresa/${tk}` });
     else if (g.st.startsWith('↓')) itens.push({ tipo: 'compra', ordem: 2, tk, tkLogo: e?.ticker, rotulo: 'Em promoção', titulo: `${tk} abaixo do preço normal`,
-      texto: `R$ ${num(p, 2)} · normal R$ ${num(g.normal, 2)} (${pctSinal(g.normal / p - 1, 0)}) · lucro intacto pela regra${tem(tk) ? ' · você tem' : ''}`, href: `empresa/${tk}` });
+      texto: `R$ ${num(p, 2)} · normal R$ ${num(g.normal, 2)} (${pctSinal(g.normal / p - 1, 0)}) · ${g.pendente ? 'resultado novo ainda fora da base: conferir' : 'lucro intacto pela regra'}${tem(tk) ? ' · você tem' : ''}`, href: `empresa/${tk}` });
     else if (g.st.startsWith('Barata')) itens.push({ tipo: 'conferir', ordem: 3, tk, tkLogo: e?.ticker, rotulo: 'Conferir', titulo: `${tk} barata, mas com tese em dúvida`,
       texto: g.tese.join('; '), href: `empresa/${tk}` });
     const v = variacao(tk, 1);
@@ -996,13 +1053,28 @@ function gatilhoAcao(tk, e, p) {
   if (ok(e.dy_3a) && ok(e.dy) && e.dy < 0.5 * e.dy_3a) tese.push('dividendo caiu à metade do normal');
   if (e.payout > 1) tese.push(`pagou mais do que lucrou (payout ${pct(e.payout, 0)}): conte com dividendo menor`);
   if (e.lucro_suspeito) tese.push('lucro com sinal de não recorrente');
+  // Dividendo de 12 meses muito acima do normal: houve pagamento extraordinário (ex.: Marcopolo, 26% contra 5%)
+  if (ok(e.dy) && e.dy_mediana > 0 && e.dy > 2 * e.dy_mediana) {
+    tese.push(`dividendo de 12 meses (${pct(e.dy, 0)}) é ${num(e.dy / e.dy_mediana, 0)} vezes o normal (${pct(e.dy_mediana, 0)}): inclui pagamento extraordinário, não conte com ele daqui para frente`);
+  }
+  // Resultado do trimestre já divulgado, mas a CVM só publica os números no domingo: a regra ainda olha o anterior
+  const pendente = resultadoForaDaBase(e);
+  if (pendente) tese.push(pendente);
   const quebrada = tese.some(t => t.startsWith('ROE') || t.startsWith('dividendo caiu'));
   let st;
   if (e.pl >= e.pl_p75) st = ehTrade ? '↑ Cara: realizar o restante' : (e.dy < (e.dy_mediana ?? 0) ? '↑ Cara e com dividendo abaixo do normal: reduzir' : '↑ Cara: parar de aportar');
   else if (e.pl >= e.pl_mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
-  else if (e.pl <= e.pl_p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes' : '↓ Em promoção com lucro intacto';
+  else if (e.pl <= e.pl_p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes'
+    : pendente ? '↓ Em promoção, mas falta o resultado novo: conferir antes' : '↓ Em promoção com lucro intacto';
   else st = 'Abaixo do normal: segurar';
-  return { normal: alvo(e.pl_mediana), caro: alvo(e.pl_p75), st, tese, ehTrade };
+  return { normal: alvo(e.pl_mediana), caro: alvo(e.pl_p75), st, tese, ehTrade, pendente: !!pendente };
+}
+// Texto de aviso quando o resultado da temporada já saiu (pela agenda) e ainda não está na base
+function resultadoForaDaBase(e) {
+  const a = e && entradaAgenda(e), hoje = hojeIso();
+  if (!a || resumoTrimestre(e)) return null;
+  const saiu = a.data < hoje || (a.data === hoje && /antes/.test(a.quando ?? ''));
+  return saiu ? `resultado do ${AGENDA.trimestre} saiu em ${data(a.data).slice(0, 5)} e só entra na base no domingo: lucro, P/L e preço normal ainda são do trimestre anterior` : null;
 }
 // Preço-alvo com a distância do preço de hoje
 const celulaAlvo = (alvo, p) => ok(alvo) ? `R$ ${num(alvo, 2)}<span class="nome" style="display:block">${Math.abs(alvo / p - 1) < 0.005 ? 'no preço' : pctSinal(alvo / p - 1, 0)}</span>` : '–';
@@ -1304,6 +1376,7 @@ function montarAtivo(el, ticker) {
       <div class="ativo-numeros ativo-numeros-p" id="a-div-numeros">${numeros([['Dividendos 12m', pct(e.dy)], ['Média de 3 anos', pct(e.dy_3a)], ['Payout 12m', pct(e.payout)],
         ['Pago em 12 meses', dinheiro(e.dividendos_12m)], ['Preço-teto Bazin', ok(tetoBazin) ? `R$ ${num(tetoBazin, 2)}` : '–']])}</div>
       ${e.payout > 1 ? `<div class="aviso">${ICONE_ALERTA}<div>Nos últimos 12 meses pagou mais do que lucrou (payout ${pct(e.payout, 0)}). Conte com dividendo menor à frente.</div></div>` : ''}
+      ${ok(e.dy) && e.dy_mediana > 0 && e.dy > 2 * e.dy_mediana ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Dividendo fora do normal:</strong> os ${pct(e.dy)} dos últimos 12 meses são ${num(e.dy / e.dy_mediana, 0)} vezes a mediana desde 2020 (${pct(e.dy_mediana)}). Inclui pagamento extraordinário ou o preço caiu muito: não use esse percentual como expectativa.</div></div>` : ''}
       <div class="graficos"><div class="grafico-bloco"><h3>Proventos por ação, por ano</h3><div class="tile-sub">Dividendos, JCP e rendimentos pela data com, ajustados por desdobramento</div><div class="grafico" id="g-prov-ano"></div></div>
         <div class="grafico-bloco"><h3>Dividend yield por ano</h3><div class="tile-sub">Soma de cada provento ÷ o preço da ação na data com</div><div class="grafico" id="g-dy-ano"></div></div></div>
       <div class="graficos"><div class="grafico-bloco"><h3>Em que meses costuma pagar</h3><div class="tile-sub">Pela data com, nos últimos 5 anos: quanto mais escuro, mais vezes</div><div id="a-meses"></div></div>
