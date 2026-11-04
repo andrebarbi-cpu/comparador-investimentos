@@ -4,29 +4,93 @@
     {
       "id": "dividendos",
       "nome": "Carteira de dividendos",
-      "acoes": ["ITSA4", "BBAS3", "BBSE3", "PSSA3", "CPFE3", "CXSE3", "TIMS3", "VALE3", "SAPR4"]
+      "acoes": [
+        "ITSA4",
+        "BBAS3",
+        "BBSE3",
+        "PSSA3",
+        "CPFE3",
+        "CXSE3",
+        "TIMS3",
+        "VALE3",
+        "SAPR4"
+      ]
     },
     {
       "id": "global",
       "nome": "Carteira global e renda fixa",
-      "acoes": ["PSSA3", "TIMS3"],
-      "etfs": ["IVVB11"],
-      "tesouro": [{ "titulo": "Tesouro IPCA+", "vencimento": "2050-08-15" }],
-      "cdb": true
+      "acoes": [
+        "PSSA3",
+        "TIMS3"
+      ],
+      "etfs": [
+        "IVVB11"
+      ],
+      "tesouro": [
+        {
+          "titulo": "Tesouro IPCA+",
+          "vencimento": "2050-08-15"
+        }
+      ],
+      "cdb": true,
+      "faixas": {
+        "_leia": "Faixa de peso de cada classe na parte investida (fora a reserva). Abaixo da faixa: direcionar aportes e dividendos; acima: realizar parte.",
+        "tesouro": [
+          0.3,
+          0.35
+        ],
+        "global": [
+          0.2,
+          0.25
+        ],
+        "acoes": [
+          0.25,
+          0.3
+        ],
+        "municao": [
+          0.1,
+          0.2
+        ]
+      }
     }
   ],
   "concentracao": {
     "_leia": "Aviso na aba Carteiras quando um setor de ações passa desta fatia do saldo (0,4 = 40%). Bancos, seguradoras e holdings financeiras contam juntos como Financeiro.",
     "limite_setor": 0.4
   },
+  "regras": {
+    "_leia": "Gatilhos mostrados na aba Carteiras. Ações de \"trade\" realizam metade na mediana do P/L e o resto no percentil 75; as demais são de dividendo e só reduzem se ficarem caras com dividendo abaixo do normal.",
+    "tesouro_venda": {
+      "parcial": 5.5,
+      "total": 5
+    },
+    "roe_minimo": {
+      "Bancos": 0.18,
+      "Seguradoras e Corretoras": 0.18,
+      "Intermediação Financeira": 0.18,
+      "padrao": 0.12
+    },
+    "trade": [
+      "BPAC11",
+      "BBDC4"
+    ]
+  },
   "oportunidades": {
     "_leia": "Setores voláteis que só aparecem nas oportunidades quando a nota é excepcional.",
-    "setores_evitar": ["Comércio (Atacado e Varejo)"],
+    "setores_evitar": [
+      "Comércio (Atacado e Varejo)"
+    ],
     "nota_minima_excecao": 90,
     "foco": {
       "_leia": "Visão padrão: setores perenes e empresas grandes (confiança no aporte). Valores em reais.",
-      "setores": ["Bancos", "Seguradoras e Corretoras", "Intermediação Financeira", "Energia Elétrica",
-        "Saneamento, Serv. Água e Gás", "Telecomunicações"],
+      "setores": [
+        "Bancos",
+        "Seguradoras e Corretoras",
+        "Intermediação Financeira",
+        "Energia Elétrica",
+        "Saneamento, Serv. Água e Gás",
+        "Telecomunicações"
+      ],
       "valor_mercado_minimo": 5000000000,
       "valor_mercado_minimo_financeiras": 20000000000
     }

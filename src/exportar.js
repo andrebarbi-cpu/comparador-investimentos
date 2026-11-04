@@ -51,6 +51,11 @@ export function exportar(db) {
   const macro = {
     selic: ultimo('selic_meta'), ipca_12m: ultimo('ipca_12m'), dolar: ultimo('dolar'),
     cdi_dia: ultimo('cdi'), tesouro_data: db.prepare('SELECT max(data) d FROM tesouro').get().d,
+    // Dólar de 12 meses: referência para saber se o IVVB11 está "inflado" pelo câmbio
+    dolar_12m: (() => {
+      const v = db.prepare("SELECT valor FROM macro WHERE serie = 'dolar' AND data >= date('now', '-365 day') ORDER BY valor").all().map(r => r.valor);
+      return v.length ? { min: v[0], mediana: v[Math.floor(v.length / 2)], max: v.at(-1) } : null;
+    })(),
   };
 
   // Carteiras acompanhadas: cotações diárias dos últimos ~400 dias, histórico dos títulos do

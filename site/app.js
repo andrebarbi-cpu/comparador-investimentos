@@ -185,9 +185,9 @@ const CHAVE_LOCAL = 'comparador.carteiras.v1';
 function lerLocal() {
   try {
     const s = JSON.parse(localStorage.getItem(CHAVE_LOCAL));
-    if (s && typeof s === 'object') return { qtd: s.qtd ?? {}, cdbs: s.cdbs ?? [] };
+    if (s && typeof s === 'object') return { qtd: s.qtd ?? {}, cdbs: s.cdbs ?? [], reserva: s.reserva ?? {} };
   } catch { /* sem acesso ao armazenamento: segue sem quantidades */ }
-  return { qtd: {}, cdbs: [] };
+  return { qtd: {}, cdbs: [], reserva: {} };
 }
 let local = lerLocal();
 let localSalvo = true;
@@ -205,6 +205,7 @@ function importar(codigo) {
     const d = deBase64(codigo);
     Object.assign(local.qtd, d.qtd ?? {});
     if (Array.isArray(d.cdbs) && d.cdbs.length) local.cdbs = d.cdbs;
+    Object.assign(local.reserva, d.reserva ?? {});
     salvarLocal();
     avisoImportacao = localSalvo ? 'Quantidades importadas e salvas neste aparelho.'
       : 'Quantidades importadas, mas este navegador não deixa salvar: elas somem ao fechar a página.';
@@ -257,7 +258,7 @@ function montarCarteiras(el) {
   avisoImportacao = '';
   desenharCarteiras();
   $('#cart-link').addEventListener('click', async () => {
-    const url = `${location.origin}${location.pathname}#importar/${paraBase64({ qtd: local.qtd, cdbs: local.cdbs })}`;
+    const url = `${location.origin}${location.pathname}#importar/${paraBase64({ qtd: local.qtd, cdbs: local.cdbs, reserva: local.reserva })}`;
     const txt = $('#cart-link-txt');
     txt.hidden = false;
     txt.value = url;
@@ -273,6 +274,7 @@ function desenharCarteiras() {
       <h2 style="margin:20px 0 8px">${esc(c.nome)}</h2>
       <div class="blocos" id="resumo-${esc(c.id)}"></div>
       ${blocoConcentracao(c)}
+      ${blocoGatilhos(c)}
       ${c.acoes?.length ? blocoAcoes(c) : ''}
       ${c.etfs?.length ? blocoEtfs(c) : ''}
       ${c.tesouro?.length ? blocoTesouro(c) : ''}
@@ -297,6 +299,12 @@ function desenharCarteiras() {
     desenharCarteiras();
   });
   ligarCdbs();
+  for (const i of corpo.querySelectorAll('input[data-reserva]')) i.addEventListener('change', () => {
+    const v = Number(i.value);
+    if (v > 0) local.reserva[i.dataset.reserva] = v; else delete local.reserva[i.dataset.reserva];
+    salvarLocal();
+    desenharCarteiras();
+  });
   for (const c of CARTEIRAS) for (const t of c.tesouro ?? []) graficoTesouro(t);
 }
 
@@ -482,6 +490,113 @@ function resumoCarteira(c) {
       <div class="tile-sub">Pelos preços de ${rotuloPrecos()}</div></div>
     ${c.acoes ? `<div class="bloco"><h3>Renda anual estimada</h3><div class="tile-valor">${dinheiro(renda)}</div>
       <div class="tile-sub">${pct(renda / saldo)} sobre o saldo, pelos dividendos dos últimos 12 meses</div></div>` : ''}`;
+}
+
+// ---------- Gatilhos de compra e venda ----------
+// Regras de config/carteiras.json: faixas por classe, taxa de venda do Tesouro, P/L de saída e
+// sinais de tese quebrada. Só aponta; quem decide é a pessoa.
+const REGRAS = D.config?.regras ?? {};
+const selo = t => `<span class="selo">${t}</span>`;
+function blocoGatilhos(c) {
+  const partes = [];
+  if (c.faixas) partes.push(gatilhosFaixas(c));
+  for (const t of c.tesouro ?? []) partes.push(gatilhoTesouro(t));
+  if (c.etfs?.includes('IVVB11')) partes.push(gatilhoDolar());
+  if (c.acoes?.length) partes.push(gatilhosAcoes(c));
+  const corpo = partes.filter(Boolean).join('');
+  return corpo ? `<div class="grafico-bloco" style="margin-bottom:12px"><h3>Gatilhos de compra e venda</h3>
+    <div class="tile-sub">Regras que vocês definiram (config/carteiras.json). Elas apontam o momento; a decisão é de vocês.</div>${corpo}</div>` : '';
+}
+
+function gatilhosFaixas(c) {
+  const reserva = local.reserva?.[c.id] ?? 0;
+  const v = { tesouro: 0, global: 0, acoes: 0, cdb: 0 };
+  for (const t of c.tesouro ?? []) v.tesouro += (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (infoTesouro(t).pu ?? 0);
+  for (const tk of c.etfs ?? []) v.global += (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0);
+  if (c.acoes) for (const l of linhasAcoes(c)) v.acoes += l.saldo;
+  if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) v.cdb += calcularCdb(cdb).bruto;
+  const municao = Math.max(0, v.cdb - reserva);
+  const investido = v.tesouro + v.global + v.acoes + municao;
+  const campo = `<label class="tile-sub" style="display:flex;gap:8px;align-items:center;margin:8px 0">Reserva de emergência (fica fora das faixas):
+    <input class="campo" type="number" min="0" step="100" data-reserva="${esc(c.id)}" value="${reserva || ''}" placeholder="ex.: 10000" style="width:120px"></label>`;
+  if (!investido) return campo;
+  const nomes = { tesouro: 'Tesouro longo', global: 'Global (IVVB11)', acoes: 'Ações Brasil', municao: 'Munição (CDB além da reserva)' };
+  const valores = { tesouro: v.tesouro, global: v.global, acoes: v.acoes, municao };
+  const linhas = Object.entries(nomes).map(([k, nome]) => {
+    const [lo, hi] = c.faixas[k] ?? [];
+    const f = valores[k] / investido;
+    // Munição funciona ao contrário: acima da faixa é caixa sobrando para usar nas classes abaixo
+    const st = !ok(lo) ? '' : k === 'municao'
+      ? (f > hi ? selo('↑ Caixa sobrando: usar nas classes abaixo da faixa') : f < lo ? selo('↓ Pouca munição: recompor antes de comprar') : selo('Dentro da faixa'))
+      : f < lo ? selo('↓ Abaixo: direcionar aportes e dividendos para cá')
+      : f > hi ? selo('↑ Acima: realizar parte ou parar de aportar') : selo('Dentro da faixa');
+    return `<tr style="cursor:default"><td class="esq">${nome}</td><td>${dinheiro(valores[k])}</td><td><b>${pct(f, 0)}</b></td>
+      <td>${ok(lo) ? `${pct(lo, 0)}–${pct(hi, 0)}` : '–'}</td><td class="esq">${st}</td></tr>`;
+  }).join('');
+  return `<h3 style="margin-top:12px">Peso de cada classe</h3>${campo}
+    ${reserva ? '' : '<p class="tile-sub" style="margin:0 0 6px">Sem a reserva informada, todo o CDB conta como munição.</p>'}
+    <div style="overflow-x:auto"><table><thead><tr><th class="esq">Classe</th><th>Valor</th><th>Peso</th><th>Faixa</th><th class="esq">Situação</th></tr></thead>
+    <tbody>${linhas}</tbody></table></div>`;
+}
+
+// Quanto o título ganha (além do IPCA) se a taxa cair até o gatilho
+function gatilhoTesouro(t) {
+  const i = infoTesouro(t), g = REGRAS.tesouro_venda;
+  if (!i.ult || !g) return '';
+  const anos = (Date.parse(t.vencimento) - Date.parse(i.ult[0])) / 864e5 / 365.25;
+  const ganho = alvo => ((1 + i.taxa / 100) / (1 + alvo / 100)) ** anos - 1;
+  const st = i.taxa <= g.total ? selo(`↑ Gatilho de venda forte (taxa ≤ ${num(g.total, 1)}%)`)
+    : i.taxa <= g.parcial ? selo(`↑ Gatilho de venda parcial (taxa ≤ ${num(g.parcial, 1)}%)`) : selo('Segurar');
+  return `<h3 style="margin-top:12px">${esc(t.titulo)} ${t.vencimento.slice(0, 4)}</h3>
+    <p class="tile-sub" style="margin:0">${st} Taxa hoje IPCA + ${num(i.taxa, 2)}%. Venda parcial a ${num(g.parcial, 1)}%
+      (preço +${pct(ganho(g.parcial), 0)} além do IPCA) e forte a ${num(g.total, 1)}% (+${pct(ganho(g.total), 0)}).
+      Só vale vender se houver ativo barato para onde levar o dinheiro; o ganho paga IR.</p>`;
+}
+
+function gatilhoDolar() {
+  const d = D.macro.dolar, r = D.macro.dolar_12m;
+  if (!d || !r) return '';
+  const acima = d.valor / r.mediana - 1;
+  return `<h3 style="margin-top:12px">IVVB11 e dólar</h3>
+    <p class="tile-sub" style="margin:0">${acima > 0.05 ? selo('↑ Dólar alto: momento de rebalancear') : selo('Dólar no normal')}
+      Dólar a R$ ${num(d.valor, 2)}, ${pctSinal(acima, 0)} contra a mediana de 12 meses (R$ ${num(r.mediana, 2)}; faixa R$ ${num(r.min, 2)}–${num(r.max, 2)}).
+      ${acima > 0.05 ? 'O IVVB11 está valorizado pelo câmbio: se Ações Brasil estiverem abaixo da faixa, vender o excesso do IVVB11 e comprar o que caiu é "vender na alta e comprar na queda" num movimento só (ETF paga 15% de IR sobre o lucro).' : ''}</p>`;
+}
+
+function gatilhosAcoes(c) {
+  const pisos = REGRAS.roe_minimo ?? {}, trade = new Set(REGRAS.trade ?? []);
+  const linhas = c.acoes.map(tk => {
+    const e = porTicker.get(tk), p = precoAtual(tk) ?? e?.preco;
+    if (!e || !ok(e.pl) || e.pl <= 0) return `<tr style="cursor:default"><td class="esq"><b>${esc(tk)}</b></td><td colspan="5" class="vazio esq">Sem lucro positivo: sem faixa de P/L.</td></tr>`;
+    // P/L muito acima do próprio "caro" quase sempre é lucro que despencou (prejuízo pontual), não preço alto
+    if (ok(e.pl_p75) && e.pl > 2 * e.pl_p75) {
+      return `<tr data-ticker="${esc(tk)}"><td class="esq"><b>${esc(tk)}</b></td><td>R$ ${num(p, 2)}</td><td colspan="2" class="vazio">–</td>
+        <td class="esq">${selo('P/L distorcido: o lucro de 12 meses despencou')}</td>
+        <td class="esq" style="white-space:normal;min-width:180px">P/L ${num(e.pl)} contra ${num(e.pl_p75)} no caro histórico; a regra de preço não serve até o lucro normalizar. Avaliar pela tese${e.alertas ? ` (${e.alertas.split(' | ').length} alerta(s) na ficha)` : ''}.</td></tr>`;
+    }
+    const alvo = x => ok(x) ? p * x / e.pl : null;
+    const ehTrade = trade.has(tk);
+    const piso = pisos[e.setor] ?? pisos.padrao;
+    const tese = [];
+    if (ok(piso) && ok(e.roe) && e.roe < piso) tese.push(`ROE ${pct(e.roe, 0)} abaixo do piso de ${pct(piso, 0)}`);
+    if (ok(e.dy_3a) && ok(e.dy) && e.dy < 0.5 * e.dy_3a) tese.push('dividendo caiu à metade do normal');
+    if (e.payout > 1) tese.push(`pagou mais do que lucrou (payout ${pct(e.payout, 0)}): conte com dividendo menor`);
+    if (e.lucro_suspeito) tese.push('lucro com sinal de não recorrente');
+    if (e.alertas) tese.push(`${e.alertas.split(' | ').length} alerta(s) na ficha`);
+    const quebrada = tese.some(t => t.startsWith('ROE') || t.startsWith('dividendo caiu'));
+    let st;
+    if (e.pl >= e.pl_p75) st = ehTrade ? '↑ Cara: realizar o restante' : (e.dy < (e.dy_mediana ?? 0) ? '↑ Cara e com dividendo abaixo do normal: reduzir' : '↑ Cara: parar de aportar');
+    else if (e.pl >= e.pl_mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
+    else if (e.pl <= e.pl_p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes' : '↓ Em promoção com lucro intacto';
+    else st = 'Abaixo do normal: segurar';
+    return `<tr data-ticker="${esc(tk)}"><td class="esq"><b>${esc(tk)}</b><span class="nome">${ehTrade ? 'trade' : 'dividendo'}</span></td>
+      <td>R$ ${num(p, 2)}</td><td>R$ ${num(alvo(e.pl_mediana), 2)}</td><td>R$ ${num(alvo(e.pl_p75), 2)}</td>
+      <td class="esq">${selo(st)}</td><td class="esq" style="white-space:normal;min-width:180px">${tese.length ? tese.map(esc).join('; ') : '<span class="vazio">nada</span>'}</td></tr>`;
+  }).join('');
+  return `<h3 style="margin-top:12px">Ações: quando realizar e quando a tese quebra</h3>
+    <div class="tile-sub">"Normal" é o preço com o P/L mediano desde 2020; "caro" é o percentil 75. Os alvos supõem o lucro de hoje.</div>
+    <div style="overflow-x:auto"><table><thead><tr><th class="esq">Ação</th><th>Preço</th><th>Normal</th><th>Caro</th><th class="esq">Situação</th><th class="esq">Tese</th></tr></thead>
+    <tbody>${linhas}</tbody></table></div>`;
 }
 
 // Fatia de cada setor no saldo. Bancos, seguradoras e holdings financeiras contam juntos,

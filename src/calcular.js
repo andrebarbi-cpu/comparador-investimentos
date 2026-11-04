@@ -171,9 +171,12 @@ export function calcular(db) {
     // Comparação com o próprio histórico (meses anteriores a hoje)
     const anteriores = pontos.filter(x => x.data < hoje);
     const percentilProprio = (campo, atual) => {
-      const hist = anteriores.map(x => x[campo]).filter(x => x != null && x > 0);
-      if (hist.length < 24 || atual == null) return { mediana: mediana(hist), pct: null, n: hist.length };
-      return { mediana: mediana(hist), pct: 100 * hist.filter(x => x < atual).length / hist.length, n: hist.length };
+      const hist = anteriores.map(x => x[campo]).filter(x => x != null && x > 0).sort((a, b) => a - b);
+      // Faixa "normal" do próprio histórico: abaixo do p25 está barato, acima do p75 está caro
+      const faixa = { mediana: mediana(hist), p25: hist[Math.floor(0.25 * (hist.length - 1))] ?? null,
+        p75: hist[Math.floor(0.75 * (hist.length - 1))] ?? null, n: hist.length };
+      if (hist.length < 24 || atual == null) return { ...faixa, pct: null };
+      return { ...faixa, pct: 100 * hist.filter(x => x < atual).length / hist.length };
     };
     const histPl = percentilProprio('pl', m.pl);
     const histEvEbit = percentilProprio('ev_ebit', m.ev_ebit);
@@ -275,7 +278,7 @@ export function calcular(db) {
       // números absolutos (12 meses)
       receita_12m: t.receita, lucro_12m: t.lucro_contr, ebitda_12m: m.ebitda, dividendos_12m: t.dividendos_pagos,
       // comparação com o próprio histórico desde 2020
-      pl_mediana: histPl.mediana, pl_percentil: histPl.pct,
+      pl_mediana: histPl.mediana, pl_percentil: histPl.pct, pl_p25: histPl.p25, pl_p75: histPl.p75,
       ev_ebit_mediana: histEvEbit.mediana, ev_ebit_percentil: histEvEbit.pct,
       pvp_mediana: histPvp.mediana, pvp_percentil: histPvp.pct, dy_mediana: histDy.mediana,
       meses_historico: Math.max(histPl.n, histEvEbit.n),

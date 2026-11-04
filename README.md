@@ -99,6 +99,11 @@ podem ser apagados quando quiser.
   link `#importar/...` que leva os números no trecho depois do `#`, que o navegador não envia ao
   servidor.
 - O CDB é calculado pelo CDI diário do Banco Central, com IR pela tabela regressiva.
+- **Gatilhos de compra e venda** (`regras` e `faixas` em `config/carteiras.json`): peso de cada
+  classe contra a faixa (a reserva, informada no aparelho, fica fora), taxa de venda do Tesouro,
+  dólar contra a mediana de 12 meses (rebalancear o IVVB11) e, por ação, preço "normal" (P/L
+  mediano) e "caro" (percentil 75) com sinais de tese quebrada (ROE abaixo do piso, dividendo
+  cortado, payout acima de 100%). P/L acima do dobro do "caro" é tratado como lucro distorcido.
 - **Concentração por setor:** barra com a fatia de cada setor no saldo. Bancos, seguradoras e
   holdings financeiras contam juntos como Financeiro. Acima de `concentracao.limite_setor` (hoje,
   40%) aparece um alerta.
