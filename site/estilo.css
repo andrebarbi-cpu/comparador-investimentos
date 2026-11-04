@@ -111,8 +111,8 @@ button, input, select { font: inherit; color: inherit; }
   display: flex; flex-direction: column; padding: 18px 12px 14px;
 }
 .marca { display: flex; align-items: center; gap: 10px; padding: 0 8px 18px; text-decoration: none; color: var(--texto); }
-.marca-logo { flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--destaque); display: grid; place-items: center; }
-.marca-logo svg { width: 18px; height: 18px; }
+.marca-logo { flex: none; width: 34px; height: 34px; border-radius: 9px; box-shadow: 0 0 0 1px var(--linha); }
+.marca-logo svg { width: 100%; height: 100%; display: block; }
 .marca-nome { font-weight: 700; font-size: 1rem; line-height: 1.1; }
 .marca-nome small { display: block; font-weight: 500; font-size: .74rem; color: var(--texto-3); }
 .abas { display: flex; flex-direction: column; gap: 2px; }
