@@ -31,6 +31,13 @@ export function exportar(db) {
 
   // ETFs e CDI: fechamento do último pregão de cada mês
   const etfs = db.prepare('SELECT * FROM etfs').all().map(arredObj);
+
+  // Variação do dia (último pregão contra o anterior) de cada ação e ETF: mapa de calor da tela inicial
+  const anterior = db.prepare('SELECT fechamento FROM cotacoes WHERE ticker = ? AND data < ? ORDER BY data DESC LIMIT 1');
+  for (const e of [...empresas, ...etfs]) {
+    const a = e.data && e.preco ? anterior.get(e.ticker, e.data)?.fechamento : null;
+    e.var_dia = a ? arred(e.preco / a - 1) : null;
+  }
   const series = {};
   for (const e of etfs) {
     series[e.ticker] = db.prepare(`SELECT substr(data,1,7) mes, fechamento FROM cotacoes c WHERE ticker = ?

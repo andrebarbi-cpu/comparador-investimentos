@@ -82,33 +82,73 @@ function montarTopo() {
   if (ok(ipcaRef)) itens.push(`Tesouro IPCA+ ~10 anos <b>IPCA + ${num(ipcaRef, 2)}%</b>`);
   if (m.dolar) itens.push(`Dólar <b>R$ ${num(m.dolar.valor, 2)}</b>`);
   $('#contexto').innerHTML = itens.map(i => `<span>${i}</span>`).join('');
+  montarBusca();
+  // Altura do topo fixo: o menu de seções da página do ativo gruda logo abaixo dele
+  new ResizeObserver(() => document.documentElement.style.setProperty('--topo-altura', `${$('.topo').offsetHeight}px`)).observe($('.topo'));
+}
+
+// Busca de ativo no topo: ticker ou parte do nome; Enter abre a página da ação (ETF abre a aba de ETFs)
+function montarBusca() {
+  const campo = $('#busca'), lista = $('#busca-lista');
+  const todos = [...D.empresas.map(e => ({ tk: e.ticker, nome: e.nome, outros: e.tickers, vm: e.vm ?? 0 })),
+    ...D.etfs.map(x => ({ tk: x.ticker, nome: x.nome, outros: x.ticker, vm: 1e13, etf: true }))];
+  let achados = [], sel = 0;
+  const abrir = a => { campo.value = ''; lista.hidden = true; campo.blur(); irPara(a.etf ? 'etfs' : `empresa/${a.tk}`); };
+  const desenhar = () => {
+    lista.innerHTML = achados.map((a, i) => `<li role="option" data-i="${i}" ${i === sel ? 'aria-selected="true"' : ''}><b>${esc(a.tk)}</b><span>${esc(a.nome)}</span>${a.etf ? '<em>ETF</em>' : ''}</li>`).join('')
+      || '<li class="vazio">Nenhum ativo encontrado</li>';
+    lista.hidden = false;
+  };
+  campo.addEventListener('input', () => {
+    const q = campo.value.trim().toUpperCase();
+    if (!q) { lista.hidden = true; return; }
+    achados = todos.filter(a => a.outros.includes(q) || a.nome.toUpperCase().includes(q))
+      .sort((a, b) => (b.tk.startsWith(q) - a.tk.startsWith(q)) || b.vm - a.vm).slice(0, 8);
+    sel = 0;
+    desenhar();
+  });
+  campo.addEventListener('keydown', ev => {
+    if (lista.hidden || !achados.length) return;
+    if (ev.key === 'ArrowDown') { sel = (sel + 1) % achados.length; desenhar(); ev.preventDefault(); }
+    else if (ev.key === 'ArrowUp') { sel = (sel - 1 + achados.length) % achados.length; desenhar(); ev.preventDefault(); }
+    else if (ev.key === 'Enter') abrir(achados[sel]);
+    else if (ev.key === 'Escape') lista.hidden = true;
+  });
+  lista.addEventListener('mousedown', ev => { const li = ev.target.closest('[data-i]'); if (li) abrir(achados[Number(li.dataset.i)]); });
+  campo.addEventListener('blur', () => setTimeout(() => { lista.hidden = true; }, 150));
+  document.addEventListener('keydown', ev => {
+    if (ev.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) { ev.preventDefault(); campo.focus(); }
+  });
 }
 
 // ---------- Navegação ----------
-const ABAS = { oportunidades: montarOportunidades, carteiras: montarCarteiras, ranking: montarRanking, comparar: montarComparar, etfs: montarEtfs, metodo: montarMetodo };
+const ABAS = { inicio: montarInicio, ativo: montarAtivo, oportunidades: montarOportunidades, carteiras: montarCarteiras, ranking: montarRanking, comparar: montarComparar, etfs: montarEtfs, metodo: montarMetodo };
 const montadas = new Set();
 let abaAtual = null;
 
 function rota() {
-  const h = decodeURIComponent(location.hash.slice(1)) || 'oportunidades';
+  const h = decodeURIComponent(location.hash.slice(1)) || 'inicio';
   const [nome, arg] = h.split('/');
   if (nome === 'importar') { importar(arg); return; }
   if (nome === 'empresa') {
-    if (!abaAtual) mostrarAba('oportunidades');
-    abrirFicha(arg);
+    if (abaAtual && abaAtual !== 'ativo') voltarPara = abaAtual;
+    mostrarAba('ativo', arg);
     return;
   }
-  fecharFicha();
-  mostrarAba(ABAS[nome] ? nome : 'oportunidades', arg);
+  esconderDica();
+  mostrarAba(ABAS[nome] ? nome : 'inicio', arg);
+  window.scrollTo(0, 0);
 }
 function mostrarAba(nome, arg) {
   abaAtual = nome;
+  document.body.dataset.aba = nome;
   for (const a of document.querySelectorAll('#abas a')) {
     if (a.dataset.aba === nome) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
   }
   for (const s of document.querySelectorAll('.aba')) s.classList.toggle('ativa', s.id === `aba-${nome}`);
   const el = $(`#aba-${nome}`);
-  if (nome === 'comparar') ABAS.comparar(el, arg);
+  // Comparar depende do link; o Início, das quantidades, que podem ter mudado na Carteira
+  if (nome === 'comparar' || nome === 'inicio' || nome === 'ativo') ABAS[nome](el, arg);
   else if (!montadas.has(nome)) { ABAS[nome](el); montadas.add(nome); }
 }
 const irPara = h => { location.hash = h; };
@@ -157,6 +197,200 @@ const marcaCriterio = (criterios, k) => {
   return i < 0 ? '' : ` <span class="marca-ordem">${'①②③④⑤⑥⑦⑧⑨'[i] ?? i + 1}${criterios[i].desc ? '↓' : '↑'}</span>`;
 };
 const descreverCriterios = (criterios, rotulo) => criterios.map(c => `${rotulo(c.k)} ${c.desc ? '↓' : '↑'}`).join(' + ');
+
+// ---------- Início ----------
+// Painel do dia: mercado, a carteira de quem abriu, o que merece atenção, a agenda da semana e o mapa de calor.
+let modoMapa = null;
+function montarInicio(el) {
+  const c = CARTEIRAS[0];
+  const hora = Number(new Date().toLocaleString('en-US', { hour: 'numeric', hour12: false, timeZone: 'America/Sao_Paulo' }));
+  const saudacao = hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite';
+  const t = c ? totaisCarteira(c) : { saldo: 0 };
+  const temQtd = t.saldo > 0;
+  modoMapa ??= temQtd ? 'carteira' : 'bolsa';
+  const oport = D.empresas.filter(e => e.oportunidade && !naCarteira.has(e.cnpj) && perene(e) && grande(e))
+    .sort((a, b) => b.nota_oportunidade - a.nota_oportunidade).slice(0, 3);
+  el.innerHTML = `
+    <div class="inicio-topo"><div><h2>${saudacao}</h2>
+      <p class="intro" style="margin-bottom:0">Resumo de ${rotuloPrecos()}: o mercado, a carteira e o que pede atenção.</p></div>
+      <a class="botao" href="#carteiras">Abrir a carteira</a></div>
+    <div class="indicadores">${blocosMercado()}</div>
+    ${temQtd ? `<div class="indicadores indicadores-carteira">
+      <div class="bloco"><h3>Sua carteira</h3><div class="tile-valor">${dinheiro(t.saldo)}</div><div class="tile-sub">Saldo estimado com Tesouro e CDB</div></div>
+      <div class="bloco"><h3>Hoje</h3><div class="tile-valor ${classeSinal(t.dia)}">${t.dia >= 0 ? '+' : '−'}${dinheiro(Math.abs(t.dia))}</div>
+        <div class="tile-sub"><span class="${classeSinal(t.dia)}">${pctSinal(t.dia / (t.bolsa - t.dia))}</span> em ações e ETFs</div></div>
+      <div class="bloco"><h3>Renda anual estimada</h3><div class="tile-valor">${dinheiro(t.renda)}</div><div class="tile-sub">${dinheiro(t.renda / 12)} por mês, pelos dividendos de 12 meses</div></div>
+    </div>` : `<div class="aviso" style="border-left-color:var(--destaque)"><div>Preencha as quantidades na <a href="#carteiras">Carteira</a>
+      para ver aqui o saldo, quanto ela variou hoje e a renda estimada. Os números ficam só neste aparelho.</div></div>`}
+    <div class="inicio-grade">
+      <div class="grafico-bloco"><h3>Merece atenção</h3><div class="tile-sub">Gatilhos das regras da carteira e movimentos fortes do dia</div>
+        <div class="atencao">${itensAtencao(c).map(itemAtencao).join('') || '<p class="vazio">Nada fora do normal hoje.</p>'}</div></div>
+      <div class="grafico-bloco"><h3>Resultados da semana</h3><div class="tile-sub">Temporada ${esc(AGENDA.trimestre ?? '')} · empresas da carteira e acompanhadas</div>
+        <div class="atencao">${agendaSemana() || '<p class="vazio">Nenhum resultado nos próximos dias.</p>'}</div></div>
+    </div>
+    <div class="grafico-bloco" style="margin-top:12px">
+      <div class="mapa-topo"><div><h3>Mapa do dia</h3><div class="tile-sub" id="mapa-legenda"></div></div>
+        <span class="segmentado" role="group" aria-label="O que mostrar no mapa">
+          <button data-mapa="carteira" aria-pressed="${modoMapa === 'carteira'}">Carteira</button>
+          <button data-mapa="bolsa" aria-pressed="${modoMapa === 'bolsa'}">Maiores da bolsa</button></span></div>
+      <div class="mapa" id="mapa"></div>
+      <div class="mapa-escala" aria-hidden="true"><span>−4%</span><i></i><span>0</span><i class="alta"></i><span>+4%</span></div>
+    </div>
+    ${oport.length ? `<div class="inicio-titulo"><h3 class="secao" style="margin:0">Oportunidades em destaque</h3><a href="#oportunidades">Ver todas</a></div>
+      <div class="cartoes">${oport.map(cartaoOportunidade).join('')}</div>` : ''}`;
+  for (const b of el.querySelectorAll('[data-mapa]')) b.addEventListener('click', () => { modoMapa = b.dataset.mapa; montarInicio(el); });
+  for (const a of el.querySelectorAll('[data-ir]')) a.addEventListener('click', () => irPara(a.dataset.ir));
+  for (const k of el.querySelectorAll('.cartao')) k.addEventListener('click', () => irPara(`empresa/${k.dataset.ticker}`));
+  for (const s of el.querySelectorAll('.spark')) desenharSpark(s, porTicker.get(s.dataset.ticker));
+  desenharMapa($('#mapa'), c);
+}
+
+// Saldo, renda, quanto ações e ETFs variaram hoje (em reais) e quanto há em bolsa
+function totaisCarteira(c) {
+  let saldo = 0, renda = 0, dia = 0, bolsa = 0;
+  const somarBolsa = (tk, valor) => { bolsa += valor; const v = variacao(tk, 1); if (ok(v)) dia += valor * v / (1 + v); };
+  if (c.acoes) for (const l of linhasAcoes(c)) { saldo += l.saldo; renda += l.renda; somarBolsa(l.tk, l.saldo); }
+  for (const tk of c.etfs ?? []) { const v = (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0); saldo += v; somarBolsa(tk, v); }
+  for (const t of c.tesouro ?? []) saldo += (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (infoTesouro(t).pu ?? 0);
+  if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) saldo += calcularCdb(cdb).bruto;
+  return { saldo, renda, dia, bolsa };
+}
+
+function blocosMercado() {
+  const b = etf.BOVA11, m = D.macro, r = m.dolar_12m;
+  const bloco = (titulo, valor, sub, href) => `<a class="bloco bloco-link" ${href ? `href="${href}"` : ''}><h3>${titulo}</h3><div class="tile-valor">${valor}</div><div class="tile-sub">${sub}</div></a>`;
+  return [
+    b && bloco('Ibovespa (BOVA11)', `<span class="${classeSinal(b.var_dia)}">${pctSinal(b.var_dia)}</span>`,
+      `${pctSinal(b.ret_1m)} no mês · ${pct(-b.distancia_maxima_52s, 0)} abaixo do pico`, '#etfs'),
+    m.dolar && bloco('Dólar', `R$ ${num(m.dolar.valor, 2)}`, r ? `${pctSinal(m.dolar.valor / r.mediana - 1, 0)} contra a mediana de 12 meses` : '', '#etfs'),
+    etf.IVVB11 && bloco('S&P 500 (IVVB11)', `<span class="${classeSinal(etf.IVVB11.var_dia)}">${pctSinal(etf.IVVB11.var_dia)}</span>`, `${pctSinal(etf.IVVB11.ret_12m, 0)} em 12 meses`, '#etfs'),
+    m.selic && bloco('Selic', `${num(m.selic.valor, 2)}%`, m.ipca_12m ? `IPCA 12 meses ${num(m.ipca_12m.valor, 2)}%` : '', '#etfs'),
+    ok(ipcaRef) && bloco('Tesouro IPCA+', `${num(ipcaRef, 2)}%`, 'Taxa real do título de ~10 anos', '#etfs'),
+  ].filter(Boolean).join('');
+}
+
+// Itens do "Merece atenção", do mais urgente ao menos
+function itensAtencao(c) {
+  if (!c) return [];
+  const itens = [];
+  const tem = tk => local.qtd[tk] > 0;
+  for (const l of c.acoes ? linhasAcoes(c) : []) {
+    const { tk, e, p, g } = l, nome = e?.nome;
+    if (g.st.startsWith('↑')) itens.push({ tipo: 'venda', ordem: 1, tk, tkLogo: e?.ticker, rotulo: 'Realizar', titulo: `${tk}: ${g.st.slice(2)}`,
+      texto: `Preço R$ ${num(p, 2)}; caro a partir de R$ ${num(g.caro, 2)}${tem(tk) ? ' · você tem' : ''}`, href: `empresa/${tk}` });
+    else if (g.st.startsWith('↓')) itens.push({ tipo: 'compra', ordem: 2, tk, tkLogo: e?.ticker, rotulo: 'Em promoção', titulo: `${tk} abaixo do preço normal`,
+      texto: `R$ ${num(p, 2)} · normal R$ ${num(g.normal, 2)} (${pctSinal(g.normal / p - 1, 0)}) · lucro intacto pela regra${tem(tk) ? ' · você tem' : ''}`, href: `empresa/${tk}` });
+    else if (g.st.startsWith('Barata')) itens.push({ tipo: 'conferir', ordem: 3, tk, tkLogo: e?.ticker, rotulo: 'Conferir', titulo: `${tk} barata, mas com tese em dúvida`,
+      texto: g.tese.join('; '), href: `empresa/${tk}` });
+    const v = variacao(tk, 1);
+    if (ok(v) && Math.abs(v) >= 0.03) itens.push({ tipo: 'movimento', ordem: 4, tk, tkLogo: e?.ticker, rotulo: v > 0 ? 'Alta forte' : 'Queda forte',
+      titulo: `${tk} ${pctSinal(v)} hoje`, texto: nome, href: `empresa/${tk}` });
+  }
+  // Tesouro perto do gatilho de venda e dólar com movimento expressivo
+  const g = REGRAS.tesouro_venda;
+  for (const t of c.tesouro ?? []) {
+    const i = infoTesouro(t);
+    if (g && i.taxa && i.taxa <= g.parcial) itens.push({ tipo: 'venda', ordem: 1, rotulo: 'Realizar', titulo: `${t.titulo} ${t.vencimento.slice(0, 4)} no gatilho de venda`,
+      texto: `Taxa IPCA + ${num(i.taxa, 2)}%, gatilho em ${num(g.parcial, 1)}%`, href: 'carteiras' });
+  }
+  const d = D.macro.dolar, r = D.macro.dolar_12m, gd = REGRAS.rebalancear_ivvb;
+  if (d && r && gd && d.valor / r.mediana - 1 >= gd.dolar_acima) itens.push({ tipo: 'venda', ordem: 1, tk: 'IVVB11', rotulo: 'Rebalancear',
+    titulo: 'Dólar muito acima do normal', texto: `R$ ${num(d.valor, 2)}, ${pctSinal(d.valor / r.mediana - 1, 0)} contra a mediana de 12 meses`, href: 'carteiras' });
+  // Classes fora da faixa (só com quantidades preenchidas)
+  if (c.faixas) {
+    const { valores, investido } = pesosClasses(c);
+    const nomes = { tesouro: 'Tesouro longo', global: 'Global', acoes: 'Ações Brasil' };
+    if (investido) for (const [k, nome] of Object.entries(nomes)) {
+      const [lo, hi] = c.faixas[k] ?? [], f = valores[k] / investido;
+      if (f < lo) itens.push({ tipo: 'faixa', ordem: 5, rotulo: 'Aportar', titulo: `${nome} abaixo da faixa`, texto: `${pct(f, 0)} da parte investida; faixa de ${pct(lo, 0)} a ${pct(hi, 0)}`, href: 'carteiras' });
+      else if (f > hi && k !== 'global') itens.push({ tipo: 'venda', ordem: 1, rotulo: 'Acima da faixa', titulo: `${nome} acima da faixa`, texto: `${pct(f, 0)} da parte investida; faixa de ${pct(lo, 0)} a ${pct(hi, 0)}`, href: 'carteiras' });
+    }
+  }
+  return itens.sort((a, b) => a.ordem - b.ordem);
+}
+const itemAtencao = i => `<button class="atencao-item tipo-${i.tipo}" data-ir="${esc(i.href)}">
+  <span class="atencao-txt"><b>${esc(i.titulo)}</b><span>${esc(i.texto ?? '')}</span></span>
+  <span class="etiqueta etiqueta-${i.tipo}">${esc(i.rotulo)}</span></button>`;
+
+// Resultados de 3 dias atrás até 10 dias à frente
+function agendaSemana() {
+  const interessa = new Set([...CARTEIRAS.flatMap(c => c.acoes ?? []), ...(AGENDA.acompanhar ?? [])]);
+  const hoje = hojeIso(), dia = 864e5;
+  return AGENDA.datas.filter(d => interessa.has(d.ticker))
+    .map(d => ({ ...d, dias: Math.round((Date.parse(d.data) - Date.parse(hoje)) / dia) }))
+    .filter(d => d.dias >= -3 && d.dias <= 10).sort((a, b) => a.data.localeCompare(b.data)).map(d => {
+      const e = porTicker.get(d.ticker);
+      const quando = d.dias === 0 ? 'Hoje' : d.dias === 1 ? 'Amanhã' : d.dias < 0 ? 'Divulgado' : `Em ${d.dias} dias`;
+      const semana = new Date(`${d.data}T12:00`).toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+      const resumo = d.dias < 0 && e ? resumoTrimestre(e) : null;
+      return `<button class="atencao-item" data-ir="empresa/${esc(d.ticker)}">
+        <span class="data-bloco"><b>${d.data.slice(8, 10)}</b><span>${esc(semana)}</span></span>
+        <span class="atencao-txt"><b>${esc(d.ticker)}${d.quando ? ` · ${esc(d.quando)}` : ''}${d.confirmado ? '' : ' (a confirmar)'}</b>
+        <span>${resumo ?? esc(e?.nome ?? '')}${local.qtd[d.ticker] > 0 ? ' · você tem' : ''}</span></span>
+        <span class="etiqueta ${d.dias <= 1 && d.dias >= 0 ? 'etiqueta-resultado' : ''}">${quando}</span></button>`;
+    }).join('');
+}
+
+// Mapa de calor: retângulos proporcionais ao valor (saldo na carteira, valor de mercado na bolsa), cor pela variação do dia
+function desenharMapa(el, c) {
+  let itens, legenda;
+  if (modoMapa === 'carteira' && c) {
+    const lista = [...(c.acoes ?? []).map(tk => ({ tk, e: porTicker.get(tk) })), ...(c.etfs ?? []).map(tk => ({ tk, etf: true }))]
+      .map(x => ({ ...x, v: variacao(x.tk, 1), valor: (local.qtd[x.tk] ?? 0) * (precoAtual(x.tk) ?? 0) }));
+    const comQtd = lista.some(x => x.valor > 0);
+    itens = (comQtd ? lista.filter(x => x.valor > 0) : lista.map(x => ({ ...x, valor: 1 })));
+    legenda = comQtd ? 'Ações e ETFs da carteira; tamanho = quanto você tem' : 'Ações e ETFs da carteira (preencha as quantidades para o tamanho seguir o saldo)';
+  } else {
+    itens = D.empresas.filter(e => e.elegivel && ok(e.var_dia) && e.vm > 0).sort((a, b) => b.vm - a.vm).slice(0, 40)
+      .map(e => ({ tk: e.ticker, e, v: e.var_dia, valor: e.vm }));
+    legenda = 'As 40 maiores empresas da bolsa; tamanho = valor de mercado';
+  }
+  $('#mapa-legenda').textContent = `${legenda}. Cor: variação de ${rotuloPrecos()}.`;
+  itens.sort((a, b) => b.valor - a.valor);
+  montarGrafico(el, w => {
+    const h = w < 560 ? 300 : 340;
+    const total = itens.reduce((s, x) => s + x.valor, 0) || 1;
+    const caixas = quadricular(itens.map(x => ({ ...x, area: x.valor / total * w * h })), 0, 0, w, h);
+    el.style.height = `${h}px`;
+    el.innerHTML = caixas.map(x => {
+      const forca = ok(x.v) ? Math.min(1, Math.abs(x.v) / 0.04) : 0;
+      const cor = !ok(x.v) || forca < 0.02 ? 'var(--superficie-2)'
+        : `color-mix(in srgb, var(${x.v > 0 ? '--mapa-alta' : '--mapa-baixa'}) ${Math.round(18 + 72 * forca)}%, var(--superficie-2))`;
+      const cabe = x.w > 54 && x.h > 34, grande = x.w > 110 && x.h > 64;
+      return `<button class="mapa-caixa ${forca > 0.45 ? 'forte' : ''}" style="left:${x.x}px;top:${x.y}px;width:${x.w}px;height:${x.h}px;background:${cor}"
+        data-ir="${x.etf ? 'etfs' : `empresa/${esc(x.tk)}`}" title="${esc(x.tk)}${x.e ? ' · ' + esc(x.e.nome) : ''}: ${pctSinal(x.v)}">
+        ${cabe ? `<b style="font-size:${grande ? '1rem' : '.78rem'}">${esc(x.tk)}</b><span>${pctSinal(x.v)}</span>` : ''}</button>`;
+    }).join('');
+    for (const b of el.querySelectorAll('[data-ir]')) b.addEventListener('click', () => irPara(b.dataset.ir));
+  });
+}
+// Treemap "squarified": enche faixas ao longo do lado menor enquanto as caixas ficarem mais quadradas
+function quadricular(itens, x, y, w, h) {
+  const out = [];
+  let resto = itens.filter(i => i.area > 0);
+  while (resto.length) {
+    const lado = Math.min(w, h);
+    const pior = l => {
+      const s = l.reduce((a, b) => a + b.area, 0), mx = Math.max(...l.map(z => z.area)), mn = Math.min(...l.map(z => z.area));
+      return Math.max(lado * lado * mx / (s * s), s * s / (lado * lado * mn));
+    };
+    const linha = [resto[0]];
+    let i = 1;
+    while (i < resto.length && pior([...linha, resto[i]]) <= pior(linha)) linha.push(resto[i++]);
+    const s = linha.reduce((a, b) => a + b.area, 0);
+    if (w >= h) {
+      const lw = s / h; let yy = y;
+      for (const z of linha) { const zh = z.area / lw; out.push({ ...z, x, y: yy, w: lw, h: zh }); yy += zh; }
+      x += lw; w -= lw;
+    } else {
+      const lh = s / w; let xx = x;
+      for (const z of linha) { const zw = z.area / lh; out.push({ ...z, x: xx, y, w: zw, h: lh }); xx += zw; }
+      y += lh; h -= lh;
+    }
+    resto = resto.slice(i);
+  }
+  return out;
+}
 
 // ---------- Oportunidades ----------
 // Foco: setores perenes e empresas grandes (confiança no aporte). Valores em config/carteiras.json.
@@ -556,16 +790,33 @@ function ligarCdbs() {
 
 function resumoCarteira(c) {
   const el = document.getElementById(`resumo-${c.id}`);
-  let saldo = 0, renda = 0;
-  if (c.acoes) for (const l of linhasAcoes(c)) { saldo += l.saldo; renda += l.renda; }
-  for (const tk of c.etfs ?? []) saldo += (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0);
-  for (const t of c.tesouro ?? []) saldo += (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (infoTesouro(t).pu ?? 0);
-  if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) saldo += calcularCdb(cdb).bruto;
+  const { saldo, renda, dia, bolsa } = totaisCarteira(c);
   if (!saldo) { el.innerHTML = '<p class="tile-sub" style="margin:0">Preencha as quantidades para ver o saldo e a renda estimada.</p>'; return; }
-  el.innerHTML = `<div class="bloco"><h3>Saldo estimado</h3><div class="tile-valor">${dinheiro(saldo)}</div>
+  el.innerHTML = `<div class="resumo-coluna"><div class="bloco"><h3>Saldo estimado</h3><div class="tile-valor">${dinheiro(saldo)}</div>
       <div class="tile-sub">Pelos preços de ${rotuloPrecos()}</div></div>
+    ${bolsa ? `<div class="bloco"><h3>Hoje</h3><div class="tile-valor ${classeSinal(dia)}">${dia >= 0 ? '+' : '−'}${dinheiro(Math.abs(dia))}</div>
+      <div class="tile-sub"><span class="${classeSinal(dia)}">${pctSinal(dia / (bolsa - dia))}</span> em ações e ETFs</div></div>` : ''}
     ${c.acoes ? `<div class="bloco"><h3>Renda anual estimada</h3><div class="tile-valor">${dinheiro(renda)}</div>
-      <div class="tile-sub">${pct(renda / saldo)} sobre o saldo, pelos dividendos dos últimos 12 meses</div></div>` : ''}`;
+      <div class="tile-sub">${pct(renda / saldo)} sobre o saldo, pelos dividendos dos últimos 12 meses</div></div>` : ''}</div>
+    <div class="bloco bloco-rosca"><h3>Onde está o dinheiro</h3>${rosca(itensConcentracao(c).itens)}</div>`;
+}
+
+// Rosca com as maiores fatias; o que passar de 6 vira "Outros"
+function rosca(itens) {
+  const fatias = itens.slice(0, 6).map((i, k) => ({ nome: i.nome, fatia: i.fatia, valor: i.valor, cor: `var(--serie-${k + 1})` }));
+  const resto = itens.slice(6);
+  if (resto.length) fatias.push({ nome: 'Outros', fatia: resto.reduce((s, i) => s + i.fatia, 0), valor: resto.reduce((s, i) => s + i.valor, 0), cor: 'var(--texto-3)' });
+  const R = 42, C = 2 * Math.PI * R;
+  let acum = 0;
+  const arcos = fatias.map(f => {
+    const tam = Math.max(0, f.fatia * C - (fatias.length > 1 ? 1.5 : 0));
+    const arco = `<circle r="${R}" cx="50" cy="50" fill="none" stroke="${f.cor}" stroke-width="14"
+      stroke-dasharray="${tam} ${C - tam}" stroke-dashoffset="${-acum}" transform="rotate(-90 50 50)"><title>${esc(f.nome)}: ${pct(f.fatia, 0)}</title></circle>`;
+    acum += f.fatia * C;
+    return arco;
+  }).join('');
+  return `<div class="rosca"><svg viewBox="0 0 100 100" role="img" aria-label="Distribuição do saldo">${arcos}</svg>
+    <ul class="rosca-legenda">${fatias.map(f => `<li><i style="background:${f.cor}"></i><span>${esc(f.nome)}</span><b>${pct(f.fatia, 0)}</b></li>`).join('')}</ul></div>`;
 }
 
 // ---------- Agenda de resultados ----------
@@ -877,111 +1128,161 @@ function desenharRanking() {
 }
 
 // ---------- Ficha da empresa ----------
-let focoAntesDaFicha = null;
-function abrirFicha(ticker) {
+// Página própria de cada ação, como nas plataformas de análise: cabeçalho com preço e números-chave,
+// atalhos para as seções (resumo, indicadores, dividendos, resultados e setor) e tudo numa página só.
+const SECOES_ATIVO = [['resumo', 'Resumo'], ['indicadores', 'Indicadores'], ['dividendos', 'Dividendos'], ['resultados', 'Resultados'], ['setor', 'Setor']];
+let voltarPara = 'inicio';
+function montarAtivo(el, ticker) {
   const e = porTicker.get(ticker);
-  if (!e) { irPara(abaAtual ?? 'oportunidades'); return; }
-  const fundo = $('#ficha-fundo'), ficha = $('#ficha');
-  if (fundo.hidden) focoAntesDaFicha = document.activeElement;
+  if (!e) { el.innerHTML = `<p class="vazio">Ativo ${esc(ticker)} não encontrado.</p>`; return; }
   const fin = !!e.financeira;
   const outros = e.tickers.split(' ').filter(t => t !== e.ticker);
+  const p = precoAtual(ticker) ?? (ticker === e.ticker ? e.preco : null) ?? e.preco;
   const linha = (rotulo, valor, dica) => `<dt${dica ? ` title="${esc(dica)}"` : ''}>${rotulo}</dt><dd>${valor}</dd>`;
-  ficha.innerHTML = `
-    <button class="fechar" aria-label="Fechar">×</button>
-    <div class="ficha-cabecalho">
-      <h2 id="ficha-titulo">${esc(e.ticker)}</h2>
-      <span class="nome">${esc(e.nome)}</span>
-      <span class="setor">${esc(e.setor)}${e.segmento ? ' · ' + esc(e.segmento) : ''}${e.controle ? ' · controle ' + esc(e.controle.toLowerCase()) : ''}</span>
-    </div>
-    ${outros.length ? `<div class="setor">Outros códigos: ${outros.map(esc).join(', ')}</div>` : ''}
-    <div class="acoes-ficha">
-      <a class="botao botao-principal" href="#comparar/${encodeURIComponent(e.ticker)}">Comparar com outras</a>
-      ${proximoResultado(e)}
-      ${selos(e)}
-    </div>
-    ${e.oportunidade ? `<div class="aviso" style="border-left-color:var(--destaque)"><div><strong>Por que é oportunidade:</strong> ${esc(e.motivo)}.</div></div>` : ''}
-    ${!e.elegivel ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Fora do ranking:</strong> ${(e.liquidez ?? 0) < 1e6 ? 'negocia menos de R$ 1 mi por dia' : 'balanço atrasado ou sem lucro informado'}, por isso não recebe nota.</div></div>` : ''}
-    ${e.alertas ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Atenção</strong>${listaAlertas(e.alertas)}</div></div>` : ''}
-    <div class="blocos">
-      <div class="bloco"><h3>Preço</h3><div class="tile-valor">R$ ${num(e.preco, 2)}</div>
-        <div class="tile-sub"><span class="${classeSinal(e.variacao_12m)}">${pctSinal(e.variacao_12m)}</span> em 12 meses</div></div>
-      <div class="bloco"><h3>Valor de mercado</h3><div class="tile-valor">${dinheiro(e.vm)}</div>
-        <div class="tile-sub">Liquidez ${dinheiro(e.liquidez)}/dia</div></div>
-      <div class="bloco"><h3>P/L</h3><div class="tile-valor">${num(e.pl)}</div>
-        <div class="tile-sub">Mediana desde 2020: ${num(e.pl_mediana)}${ok(e.pl_percentil) ? ` · mais barato que em ${num(100 - e.pl_percentil, 0)}% dos meses` : ''}</div></div>
-      <div class="bloco"><h3>Dividendos</h3><div class="tile-valor">${pct(e.dy)}</div>
-        <div class="tile-sub">Últimos 12 meses · média de 3 anos ${pct(e.dy_3a)}</div></div>
-    </div>
-    <div class="blocos">
-      <div class="bloco"><h3>Notas (0 a 100)</h3><div class="notas-ficha">
-        ${[['Geral', e.nota_geral], ['Qualidade', e.nota_qualidade], ['Preço', e.nota_preco], ...(fin ? [] : [['Saúde', e.nota_saude]]), ['Crescimento', e.nota_crescimento]]
-          .map(([r, v]) => `<div class="medidor"><span>${r}</span>${ok(v) ? `<i style="--v:${v}%"></i><span>${v}</span>` : '<span class="vazio">–</span>'}</div>`).join('')}
-        ${e.magica_posicao ? `<div class="tile-sub">Fórmula Mágica: ${e.magica_posicao}ª posição</div>` : ''}
-      </div></div>
-      <div class="bloco"><h3>Valuation</h3><dl class="lista">
-        ${linha('P/L', num(e.pl))}${linha('P/VP', num(e.pvp, 2))}
-        ${fin ? '' : linha('EV/EBIT', num(e.ev_ebit)) + linha('EV/EBITDA', num(e.ev_ebitda))}
-        ${linha('Lucro / preço', pct(e.earnings_yield), 'Inverso do P/L: quanto a empresa lucra por real investido')}
-        ${linha('Contra Tesouro IPCA+', `<span class="${classeSinal(e.premio_vs_tesouro)}">${ok(e.premio_vs_tesouro) ? (e.premio_vs_tesouro > 0 ? '+' : '') + num(e.premio_vs_tesouro * 100, 1) + ' p.p.' : '–'}</span>`, `Lucro/preço menos a taxa real do Tesouro IPCA+ (${num(e.tesouro_ipca_ref, 2)}%)`)}
-        ${linha('Graham', ok(e.graham_margem) ? `<span class="${classeSinal(e.graham_margem)}">${pctSinal(e.graham_margem, 0)}</span>` : '–', 'Preço justo de Graham comparado ao preço atual')}
-        ${linha('Bazin', ok(e.bazin_margem) ? `<span class="${classeSinal(e.bazin_margem)}">${pctSinal(e.bazin_margem, 0)}</span>` : '–', 'Preço-teto de Bazin (dividendo médio 3 anos ÷ 6%) comparado ao preço atual')}
-      </dl></div>
-      <div class="bloco"><h3>Rentabilidade</h3><dl class="lista">
-        ${linha('ROE', pct(e.roe))}${fin ? '' : linha('ROIC', pct(e.roic))}
-        ${fin ? '' : linha('Margem bruta', pct(e.margem_bruta)) + linha('Margem EBIT', pct(e.margem_ebit)) + linha('Margem líquida', pct(e.margem_liq))}
-        ${linha('Lucro 12m', dinheiro(e.lucro_12m))}${linha('Receita 12m', dinheiro(e.receita_12m))}
-      </dl></div>
-      ${fin ? '' : `<div class="bloco"><h3>Endividamento</h3><dl class="lista">
-        ${linha('Dívida líquida', dinheiro(e.divida_liq))}
-        ${linha('Dív. líq. / EBITDA', e.div_liq_ebitda >= 99 ? 'EBITDA negativo' : num(e.div_liq_ebitda))}
-        ${linha('Dív. líq. / PL', num(e.div_liq_pl, 2))}${linha('Liquidez corrente', num(e.liq_corrente, 2))}
-        ${linha('EBITDA 12m', dinheiro(e.ebitda_12m))}
-      </dl></div>`}
-      <div class="bloco"><h3>Crescimento e constância</h3><dl class="lista">
-        ${fin ? '' : linha('Receita, 5 anos', pctSinal(e.cagr_receita_5a) + ' a.a.')}
-        ${linha('Lucro, 5 anos', pctSinal(e.cagr_lucro_5a) + ' a.a.')}
-        ${linha('Anos com lucro', `${e.anos_lucro} de ${e.anos_lucro_base}`)}
-        ${linha('Anos com dividendo', `${e.anos_dividendo} dos últimos ${Math.min(5, e.anos_lucro_base)}`)}
-        ${linha('Payout 12m', pct(e.payout))}
-      </dl></div>
-    </div>
-    <div class="graficos">
-      <div class="grafico-bloco"><h3>P/L mês a mês</h3><div class="tile-sub">Linha cinza: mediana desde 2020. Meses sem lucro ficam em branco.</div><div class="grafico" id="g-pl"></div></div>
-      <div class="grafico-bloco"><h3>P/VP mês a mês</h3><div class="tile-sub">Preço sobre patrimônio líquido</div><div class="grafico" id="g-pvp"></div></div>
-      <div class="grafico-bloco"><h3>Lucro líquido por ano</h3><div class="tile-sub">Atribuído aos controladores</div><div class="grafico" id="g-lucro"></div></div>
-      <div class="grafico-bloco"><h3>${fin ? 'Receitas de intermediação' : 'Receita líquida'} por ano</h3><div class="tile-sub">&nbsp;</div><div class="grafico" id="g-receita"></div></div>
-      <div class="grafico-bloco"><h3>Lucro por trimestre</h3><div class="tile-sub">Cada trimestre isolado, últimos 8</div><div class="grafico" id="g-tri"></div></div>
-      <div class="grafico-bloco"><h3>Dividendos e JCP pagos por ano</h3><div class="tile-sub">Pela demonstração de fluxo de caixa</div><div class="grafico" id="g-div"></div></div>
-      ${fin ? '' : `<div class="grafico-bloco"><h3>Dívida líquida por ano</h3><div class="tile-sub">Negativa = mais caixa que dívida</div><div class="grafico" id="g-divida"></div></div>`}
-    </div>
-    <p class="tile-sub">Balanço mais recente: ${data(e.dt_balanco)} · preços de ${data(e.data)} · CNPJ ${esc(e.cnpj)}</p>
-    ${e.acoes_fre ? `<p class="tile-sub">${esc(e.acoes_fre)}. O valor de mercado e os múltiplos já usam a quantidade nova.</p>` : ''}`;
-  fundo.hidden = false;
-  document.body.style.overflow = 'hidden';
-  $('.fechar', ficha).addEventListener('click', () => irPara(abaAtual));
-  $('.fechar', ficha).focus();
-  fundo.scrollTop = 0;
-
-  const hist = D.historico[e.cnpj] ?? [];
-  graficoLinhas($('#g-pl'), { series: [{ nome: 'P/L', cor: 'var(--serie-1)', pontos: hist.map(p => [p[0], p[1]]) }], fmt: v => num(v), ref: ok(e.pl_mediana) ? { y: e.pl_mediana, rotulo: `mediana ${num(e.pl_mediana)}` } : null });
-  graficoLinhas($('#g-pvp'), { series: [{ nome: 'P/VP', cor: 'var(--serie-1)', pontos: hist.map(p => [p[0], p[2]]) }], fmt: v => num(v, 2), ref: ok(e.pvp_mediana) ? { y: e.pvp_mediana, rotulo: `mediana ${num(e.pvp_mediana, 2)}` } : null });
+  const sinal = v => `<span class="${classeSinal(v)}">${pctSinal(v)}</span>`;
+  const g = naCarteira.has(e.cnpj) ? gatilhoAcao(ticker, e, p) : null;
+  const tetoBazin = ok(e.bazin_margem) ? e.preco * (1 + e.bazin_margem) : null;
+  const justoGraham = ok(e.graham_margem) ? e.preco * (1 + e.graham_margem) : null;
+  const pares = D.empresas.filter(x => x.setor === e.setor && x.vm > 0).sort((a, b) => b.vm - a.vm);
+  const vizinhos = [...new Set([...pares.slice(0, 8), e])];
+  const mediana = k => { const v = pares.map(x => x[k]).filter(ok).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; };
   const anos = (D.anuais[e.cnpj] ?? []).filter(a => a[0] >= 2015);
+  const hist = D.historico[e.cnpj] ?? [];
+
+  el.innerHTML = `
+    <div class="ativo-cabecalho">
+      <div class="ativo-id">
+        <button class="botao botao-voltar" id="a-voltar" aria-label="Voltar">←</button>
+        <div><div class="ativo-linha1"><h2 id="ativo-titulo">${esc(ticker)}</h2>${selos(e)}</div>
+          <div class="nome">${esc(e.nome)}</div>
+          <div class="setor">${esc(e.setor)}${e.segmento ? ' · ' + esc(e.segmento) : ''}${outros.length ? ` · outros códigos: ${outros.map(esc).join(', ')}` : ''}</div></div>
+      </div>
+      <div class="ativo-preco"><b>R$ ${num(p, 2)}</b><span>${sinal(e.var_dia)} no dia · ${sinal(e.variacao_12m)} em 12 meses</span></div>
+    </div>
+    <div class="ativo-numeros">
+      ${[['Valor de mercado', dinheiro(e.vm)], ['P/L', num(e.pl)], ['P/VP', num(e.pvp, 2)], ['Dividendos 12m', pct(e.dy)],
+        ['ROE', pct(e.roe)], ['Nota geral', ok(e.nota_geral) ? `${e.nota_geral}<small>/100</small>` : '–'], ['Liquidez/dia', dinheiro(e.liquidez)]]
+        .map(([r, v]) => `<div><span>${r}</span><b>${v}</b></div>`).join('')}
+    </div>
+    <nav class="ativo-secoes" aria-label="Seções do ativo">${SECOES_ATIVO.map(([k, r]) => `<a href="#" data-secao="${k}">${r}</a>`).join('')}
+      <a class="botao botao-principal" href="#comparar/${encodeURIComponent(ticker)}">Comparar</a></nav>
+
+    <section class="ativo-secao" id="s-resumo"><h3 class="secao">Resumo</h3>
+      ${e.oportunidade ? `<div class="aviso" style="border-left-color:var(--destaque)"><div><strong>Por que é oportunidade:</strong> ${esc(e.motivo)}.</div></div>` : ''}
+      ${!e.elegivel ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Fora do ranking:</strong> ${(e.liquidez ?? 0) < 1e6 ? 'negocia menos de R$ 1 mi por dia' : 'balanço atrasado ou sem lucro informado'}, por isso não recebe nota.</div></div>` : ''}
+      ${e.alertas ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Atenção</strong>${listaAlertas(e.alertas)}</div></div>` : ''}
+      <div class="blocos">
+        <div class="bloco"><h3>Notas (0 a 100)</h3><div class="notas-ficha">
+          ${[['Geral', e.nota_geral], ['Qualidade', e.nota_qualidade], ['Preço', e.nota_preco], ...(fin ? [] : [['Saúde', e.nota_saude]]), ['Crescimento', e.nota_crescimento]]
+            .map(([r, v]) => `<div class="medidor"><span>${r}</span>${ok(v) ? `<i style="--v:${v}%"></i><span>${v}</span>` : '<span class="vazio">–</span>'}</div>`).join('')}
+          ${e.magica_posicao ? `<div class="tile-sub">Fórmula Mágica: ${e.magica_posicao}ª posição</div>` : ''}</div></div>
+        <div class="bloco"><h3>Preço contra o próprio histórico</h3><dl class="lista">
+          ${linha('P/L hoje', num(e.pl))}${linha('Mediana desde 2020', num(e.pl_mediana))}
+          ${linha('Faixa barata–cara', ok(e.pl_p25) ? `${num(e.pl_p25)} a ${num(e.pl_p75)}` : '–', 'Percentis 25 e 75 do P/L mês a mês desde 2020')}
+          ${linha('Mais barato que em', ok(e.pl_percentil) ? `${num(100 - e.pl_percentil, 0)}% dos meses` : '–')}
+          ${g && ok(g.normal) ? linha('Preço normal / caro', `R$ ${num(g.normal, 2)} / R$ ${num(g.caro, 2)}`, 'Preço em que o P/L volta à mediana e ao percentil 75, com o lucro de hoje') : ''}
+        </dl>${g ? `<div class="selos" style="margin-top:8px"><span class="selo">${g.st}</span></div>` : ''}</div>
+        <div class="bloco"><h3>Preço justo pelos métodos clássicos</h3><dl class="lista">
+          ${linha('Graham', ok(justoGraham) ? `R$ ${num(justoGraham, 2)} ${sinal(e.graham_margem)}` : '–', '√(22,5 × lucro por ação × patrimônio por ação)')}
+          ${linha('Bazin (preço-teto)', ok(tetoBazin) ? `R$ ${num(tetoBazin, 2)} ${sinal(e.bazin_margem)}` : '–', 'Dividendo médio de 3 anos ÷ 6%')}
+          ${linha('Lucro / preço', pct(e.earnings_yield), 'Inverso do P/L')}
+          ${linha('Contra Tesouro IPCA+', `<span class="${classeSinal(e.premio_vs_tesouro)}">${ok(e.premio_vs_tesouro) ? (e.premio_vs_tesouro > 0 ? '+' : '') + num(e.premio_vs_tesouro * 100, 1) + ' p.p.' : '–'}</span>`, `Lucro/preço menos a taxa real do Tesouro IPCA+ (${num(e.tesouro_ipca_ref, 2)}%)`)}
+        </dl><div class="tile-sub" style="margin-top:6px">Percentual: distância do preço de hoje.</div></div>
+      </div>
+      <div class="graficos"><div class="grafico-bloco"><h3>P/L mês a mês</h3><div class="tile-sub">Linha cinza: mediana desde 2020. Meses sem lucro ficam em branco.</div><div class="grafico" id="g-pl"></div></div>
+        <div class="grafico-bloco"><h3>P/VP mês a mês</h3><div class="tile-sub">Preço sobre patrimônio líquido</div><div class="grafico" id="g-pvp"></div></div></div>
+    </section>
+
+    <section class="ativo-secao" id="s-indicadores"><h3 class="secao">Indicadores</h3>
+      <div class="blocos">
+        <div class="bloco"><h3>Valuation</h3><dl class="lista">
+          ${linha('P/L', num(e.pl))}${linha('P/VP', num(e.pvp, 2))}
+          ${fin ? '' : linha('EV/EBIT', num(e.ev_ebit)) + linha('EV/EBITDA', num(e.ev_ebitda))}
+          ${linha('Dividendos 12m', pct(e.dy))}${linha('Valor de mercado', dinheiro(e.vm))}${fin ? '' : linha('Valor da firma (EV)', dinheiro(e.ev))}
+        </dl></div>
+        <div class="bloco"><h3>Rentabilidade</h3><dl class="lista">
+          ${linha('ROE', pct(e.roe))}${fin ? '' : linha('ROIC', pct(e.roic))}
+          ${fin ? '' : linha('Margem bruta', pct(e.margem_bruta)) + linha('Margem EBIT', pct(e.margem_ebit))}
+          ${linha('Margem líquida', pct(e.margem_liq))}
+        </dl></div>
+        ${fin ? '' : `<div class="bloco"><h3>Endividamento</h3><dl class="lista">
+          ${linha('Dívida líquida', dinheiro(e.divida_liq))}
+          ${linha('Dív. líq. / EBITDA', e.div_liq_ebitda >= 99 ? 'EBITDA negativo' : num(e.div_liq_ebitda))}
+          ${linha('Dív. líq. / PL', num(e.div_liq_pl, 2))}${linha('Liquidez corrente', num(e.liq_corrente, 2))}
+        </dl></div>`}
+        <div class="bloco"><h3>Crescimento e constância</h3><dl class="lista">
+          ${fin ? '' : linha('Receita, 5 anos', pctSinal(e.cagr_receita_5a) + ' a.a.')}
+          ${linha('Lucro, 5 anos', pctSinal(e.cagr_lucro_5a) + ' a.a.')}
+          ${linha('Anos com lucro', `${e.anos_lucro} de ${e.anos_lucro_base}`)}
+          ${linha('Anos com dividendo', `${e.anos_dividendo} dos últimos ${Math.min(5, e.anos_lucro_base)}`)}
+        </dl></div>
+      </div>
+      ${fin ? '' : `<div class="graficos"><div class="grafico-bloco"><h3>EV/EBITDA mês a mês</h3><div class="tile-sub">Valor da firma sobre a geração de caixa operacional</div><div class="grafico" id="g-evebitda"></div></div>
+        <div class="grafico-bloco"><h3>Dívida líquida por ano</h3><div class="tile-sub">Negativa = mais caixa que dívida</div><div class="grafico" id="g-divida"></div></div></div>`}
+    </section>
+
+    <section class="ativo-secao" id="s-dividendos"><h3 class="secao">Dividendos</h3>
+      <div class="ativo-numeros ativo-numeros-p">
+        ${[['Dividendos 12m', pct(e.dy)], ['Média de 3 anos', pct(e.dy_3a)], ['Mediana desde 2020', pct(e.dy_mediana)], ['Payout 12m', pct(e.payout)],
+          ['Pago em 12 meses', dinheiro(e.dividendos_12m)], ['Anos pagando', `${e.anos_dividendo} de ${Math.min(5, e.anos_lucro_base)}`],
+          ['Preço-teto Bazin', ok(tetoBazin) ? `R$ ${num(tetoBazin, 2)}` : '–']].map(([r, v]) => `<div><span>${r}</span><b>${v}</b></div>`).join('')}
+      </div>
+      ${e.payout > 1 ? `<div class="aviso">${ICONE_ALERTA}<div>Nos últimos 12 meses pagou mais do que lucrou (payout ${pct(e.payout, 0)}). Conte com dividendo menor à frente.</div></div>` : ''}
+      <div class="graficos"><div class="grafico-bloco"><h3>Dividendos e JCP pagos por ano</h3><div class="tile-sub">Total pago pela empresa, pela demonstração de fluxo de caixa</div><div class="grafico" id="g-div"></div></div>
+        <div class="grafico-bloco"><h3>Dividend yield mês a mês</h3><div class="tile-sub">Dividendos de 12 meses sobre o preço de cada mês</div><div class="grafico" id="g-dy"></div></div></div>
+    </section>
+
+    <section class="ativo-secao" id="s-resultados"><h3 class="secao">Resultados</h3>
+      <div class="graficos"><div class="grafico-bloco"><h3>Lucro líquido por ano</h3><div class="tile-sub">Atribuído aos controladores</div><div class="grafico" id="g-lucro"></div></div>
+        <div class="grafico-bloco"><h3>Lucro por trimestre</h3><div class="tile-sub">Cada trimestre isolado, últimos 8${proximoResultado(e) ? ' · ' + proximoResultado(e).replace(/<[^>]+>/g, '') : ''}</div><div class="grafico" id="g-tri"></div></div></div>
+      <div class="tabela-caixa" style="max-height:none"><table class="tabela-dre"><thead><tr><th>Ano</th><th>${fin ? 'Receitas de intermediação' : 'Receita líquida'}</th><th>Lucro</th><th>Margem</th><th>Dividendos pagos</th><th>Payout</th>${fin ? '' : '<th>Dívida líquida</th>'}<th>Patrimônio</th></tr></thead>
+        <tbody>${[...anos].reverse().map(a => `<tr style="cursor:default"><td>${a[0]}</td><td>${dinheiro(a[1])}</td><td class="${a[2] < 0 ? 'negativo' : ''}">${dinheiro(a[2])}</td>
+          <td>${ok(a[1]) && a[1] > 0 && ok(a[2]) ? pct(a[2] / a[1]) : '–'}</td><td>${dinheiro(a[3])}</td><td>${ok(a[3]) && a[2] > 0 ? pct(Math.abs(a[3]) / a[2], 0) : '–'}</td>
+          ${fin ? '' : `<td>${dinheiro(a[4])}</td>`}<td>${dinheiro(a[5])}</td></tr>`).join('')}</tbody></table></div>
+      <p class="tile-sub">Balanço mais recente: ${data(e.dt_balanco)} · preços de ${data(e.data)} · CNPJ ${esc(e.cnpj)}</p>
+      ${e.acoes_fre ? `<p class="tile-sub">${esc(e.acoes_fre)}. O valor de mercado e os múltiplos já usam a quantidade nova.</p>` : ''}
+    </section>
+
+    <section class="ativo-secao" id="s-setor"><h3 class="secao">Comparado ao setor</h3>
+      <p class="tile-sub" style="margin:0 0 8px">${esc(e.setor)}: as ${vizinhos.length} maiores por valor de mercado. A última linha é a mediana das ${pares.length} empresas do setor.</p>
+      <div class="tabela-caixa" style="max-height:none"><table><thead><tr><th class="esq">Empresa</th><th>Valor de mercado</th><th>Nota</th><th>P/L</th><th>P/VP</th><th>Div. 12m</th><th>ROE</th><th>Marg. líq.</th>${fin ? '' : '<th>Dív./EBITDA</th>'}</tr></thead>
+        <tbody>${vizinhos.map(x => `<tr data-ticker="${esc(x.ticker)}" class="${x === e ? 'linha-atual' : ''}"><td class="esq empresa"><b>${esc(x.ticker)}</b><span class="nome">${esc(x.nome)}</span></td>
+          <td>${dinheiro(x.vm)}</td><td>${medidor(x.nota_geral)}</td><td>${num(x.pl)}</td><td>${num(x.pvp, 2)}</td><td>${pct(x.dy)}</td><td>${pct(x.roe)}</td><td>${pct(x.margem_liq)}</td>
+          ${fin ? '' : `<td>${x.div_liq_ebitda >= 99 ? 'n/a' : num(x.div_liq_ebitda)}</td>`}</tr>`).join('')}
+          <tr class="linha-mediana" style="cursor:default"><td class="esq"><b>Mediana do setor</b></td><td>${dinheiro(mediana('vm'))}</td><td>${medidor(mediana('nota_geral'))}</td><td>${num(mediana('pl'))}</td>
+          <td>${num(mediana('pvp'), 2)}</td><td>${pct(mediana('dy'))}</td><td>${pct(mediana('roe'))}</td><td>${pct(mediana('margem_liq'))}</td>${fin ? '' : `<td>${num(mediana('div_liq_ebitda'))}</td>`}</tr></tbody></table></div>
+    </section>`;
+
+  window.scrollTo(0, 0);
+  $('#a-voltar').addEventListener('click', () => irPara(voltarPara));
+  for (const a of el.querySelectorAll('[data-secao]')) a.addEventListener('click', ev => {
+    ev.preventDefault();
+    const alvo = $(`#s-${a.dataset.secao}`);
+    // Desconta o que fica grudado no topo: a barra de busca (só no computador) e o menu de seções
+    const grudado = (innerWidth > 900 ? $('.topo').offsetHeight : 0) + $('.ativo-secoes', el).offsetHeight + 12;
+    window.scrollTo({ top: alvo.getBoundingClientRect().top + scrollY - grudado, behavior: 'smooth' });
+  });
+  for (const tr of el.querySelectorAll('#s-setor tr[data-ticker]')) tr.addEventListener('click', () => irPara(`empresa/${tr.dataset.ticker}`));
+  // Seção visível destacada no menu de seções
+  const links = new Map([...el.querySelectorAll('[data-secao]')].map(a => [`s-${a.dataset.secao}`, a]));
+  observadorSecoes?.disconnect();
+  observadorSecoes = new IntersectionObserver(itens => {
+    for (const it of itens) if (it.isIntersecting) for (const [id, a] of links) a.toggleAttribute('aria-current', id === it.target.id);
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  for (const s of el.querySelectorAll('.ativo-secao')) observadorSecoes.observe(s);
+
+  graficoLinhas($('#g-pl'), { series: [{ nome: 'P/L', cor: 'var(--serie-1)', pontos: hist.map(x => [x[0], x[1]]) }], fmt: v => num(v), ref: ok(e.pl_mediana) ? { y: e.pl_mediana, rotulo: `mediana ${num(e.pl_mediana)}` } : null });
+  graficoLinhas($('#g-pvp'), { series: [{ nome: 'P/VP', cor: 'var(--serie-1)', pontos: hist.map(x => [x[0], x[2]]) }], fmt: v => num(v, 2), ref: ok(e.pvp_mediana) ? { y: e.pvp_mediana, rotulo: `mediana ${num(e.pvp_mediana, 2)}` } : null });
+  graficoLinhas($('#g-dy'), { series: [{ nome: 'Dividend yield', cor: 'var(--serie-3)', pontos: hist.map(x => [x[0], x[4]]) }], fmt: v => pct(v), fmtEixo: v => pct(v, 0), eixoZero: true });
+  if (!fin) {
+    graficoLinhas($('#g-evebitda'), { series: [{ nome: 'EV/EBITDA', cor: 'var(--serie-1)', pontos: hist.map(x => [x[0], x[3]]) }], fmt: v => num(v) });
+    graficoColunas($('#g-divida'), { pontos: anos.map(a => [String(a[0]), a[4]]), fmt: dinheiro });
+  }
   graficoColunas($('#g-lucro'), { pontos: anos.map(a => [String(a[0]), a[2]]), fmt: dinheiro });
-  graficoColunas($('#g-receita'), { pontos: anos.map(a => [String(a[0]), a[1]]), fmt: dinheiro });
-  graficoColunas($('#g-div'), { pontos: anos.map(a => [String(a[0]), a[3]]), fmt: dinheiro });
-  if (!fin) graficoColunas($('#g-divida'), { pontos: anos.map(a => [String(a[0]), a[4]]), fmt: dinheiro });
+  graficoColunas($('#g-div'), { pontos: anos.map(a => [String(a[0]), a[3] == null ? null : Math.abs(a[3])]), fmt: dinheiro });
   graficoColunas($('#g-tri'), { pontos: (D.trimestres?.[e.cnpj] ?? []).slice(-8).map(t => [rotuloTrimestre(t[0]), t[1]]), fmt: dinheiro });
 }
-function fecharFicha() {
-  const fundo = $('#ficha-fundo');
-  if (fundo.hidden) return;
-  fundo.hidden = true;
-  document.body.style.overflow = '';
-  esconderDica();
-  focoAntesDaFicha?.focus?.();
-}
-document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && !$('#ficha-fundo').hidden) irPara(abaAtual); });
-$('#ficha-fundo').addEventListener('click', ev => { if (ev.target.id === 'ficha-fundo') irPara(abaAtual); });
+let observadorSecoes = null;
 
 // ---------- Comparar ----------
 const LINHAS_COMPARAR = [

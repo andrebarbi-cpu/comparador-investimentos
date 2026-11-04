@@ -14,46 +14,55 @@
   <link rel="stylesheet" href="estilo.css">
 </head>
 <body>
-  <header class="topo">
-    <div class="topo-linha">
-      <div class="marca">
-        <span class="marca-logo" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15l4.5-5 3.5 3 6-7"/><path d="M13 6h4v4"/></svg></span>
-        <div>
-          <h1>Comparador de Investimentos</h1>
-          <p class="atualizado" id="atualizado"></p>
-        </div>
-      </div>
+  <!-- Menu lateral no computador; no celular vira a barra de abas do topo -->
+  <aside class="lateral">
+    <a class="marca" href="#inicio">
+      <span class="marca-logo" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15l4.5-5 3.5 3 6-7"/><path d="M13 6h4v4"/></svg></span>
+      <span class="marca-nome">Comparador<small>de Investimentos</small></span>
+    </a>
+    <nav class="abas" id="abas" aria-label="Seções">
+      <a href="#inicio" data-aba="inicio"><svg viewBox="0 0 20 20"><path d="M3 9.5 10 3l7 6.5V17H12v-5H8v5H3z"/></svg>Início</a>
+      <a href="#oportunidades" data-aba="oportunidades"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3"/></svg>Oportunidades</a>
+      <a href="#carteiras" data-aba="carteiras"><svg viewBox="0 0 20 20"><rect x="3" y="6" width="14" height="11" rx="2"/><path d="M7 6V4.5A1.5 1.5 0 0 1 8.5 3h3A1.5 1.5 0 0 1 13 4.5V6"/></svg>Carteira</a>
+      <a href="#ranking" data-aba="ranking"><svg viewBox="0 0 20 20"><path d="M4 16V9M10 16V4M16 16v-5"/></svg>Ranking e filtros</a>
+      <a href="#comparar" data-aba="comparar"><svg viewBox="0 0 20 20"><path d="M4 7h12M4 7l3-3M4 7l3 3M16 13H4M16 13l-3-3M16 13l-3 3"/></svg>Comparar</a>
+      <a href="#etfs" data-aba="etfs"><svg viewBox="0 0 20 20"><path d="M3 15l4-5 3 3 7-8"/><path d="M3 18h14"/></svg>ETFs e renda fixa</a>
+      <a href="#metodo" data-aba="metodo"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"/><path d="M8 8a2 2 0 1 1 2.5 1.9c-.4.1-.5.4-.5.8V12M10 14.5v.01"/></svg>Como funciona</a>
+    </nav>
+    <div class="lateral-rodape">
+      <p class="atualizado" id="atualizado"></p>
       <button class="botao-tema" id="tema" type="button"></button>
     </div>
-    <div class="contexto" id="contexto"></div>
-    <nav class="abas" id="abas" aria-label="Seções">
-      <a href="#oportunidades" data-aba="oportunidades">Oportunidades</a>
-      <a href="#carteiras" data-aba="carteiras">Carteira</a>
-      <a href="#ranking" data-aba="ranking">Ranking</a>
-      <a href="#comparar" data-aba="comparar">Comparar</a>
-      <a href="#etfs" data-aba="etfs">ETFs e renda fixa</a>
-      <a href="#metodo" data-aba="metodo">Como funciona</a>
-    </nav>
-  </header>
+  </aside>
 
-  <main>
-    <section id="aba-oportunidades" class="aba"></section>
-    <section id="aba-carteiras" class="aba"></section>
-    <section id="aba-ranking" class="aba"></section>
-    <section id="aba-comparar" class="aba"></section>
-    <section id="aba-etfs" class="aba"></section>
-    <section id="aba-metodo" class="aba"></section>
-  </main>
+  <div class="conteudo">
+    <header class="topo">
+      <div class="busca-caixa">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="m13.5 13.5 3.5 3.5"/></svg>
+        <input id="busca" type="search" placeholder="Buscar ação ou ETF (ex.: ITUB4, Porto)" autocomplete="off" aria-label="Buscar ativo" aria-controls="busca-lista">
+        <kbd>/</kbd>
+        <ul class="busca-lista" id="busca-lista" role="listbox" hidden></ul>
+      </div>
+      <div class="contexto" id="contexto"></div>
+    </header>
 
-  <div class="ficha-fundo" id="ficha-fundo" hidden>
-    <article class="ficha" id="ficha" role="dialog" aria-modal="true" aria-labelledby="ficha-titulo"></article>
+    <main>
+      <section id="aba-inicio" class="aba"></section>
+      <section id="aba-ativo" class="aba"></section>
+      <section id="aba-oportunidades" class="aba"></section>
+      <section id="aba-carteiras" class="aba"></section>
+      <section id="aba-ranking" class="aba"></section>
+      <section id="aba-comparar" class="aba"></section>
+      <section id="aba-etfs" class="aba"></section>
+      <section id="aba-metodo" class="aba"></section>
+    </main>
+
+    <footer class="rodape">
+      Dados públicos da CVM, B3, Banco Central e Tesouro Nacional. A ferramenta aponta candidatas para
+      estudo, não recomenda compra nem venda.
+    </footer>
   </div>
   <div class="dica" id="dica" role="tooltip" hidden></div>
-
-  <footer class="rodape">
-    Dados públicos da CVM, B3, Banco Central e Tesouro Nacional. A ferramenta aponta candidatas para
-    estudo, não recomenda compra nem venda.
-  </footer>
 
   <script src="dados.js"></script>
   <script src="app.js"></script>
