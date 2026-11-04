@@ -338,7 +338,7 @@ function itensAtencao(c) {
     if (g.st.startsWith('↑')) itens.push({ tipo: 'venda', ordem: 1, tk, tkLogo: e?.ticker, rotulo: 'Realizar', titulo: `${tk}: ${g.st.slice(2)}`,
       texto: `Preço R$ ${num(p, 2)}; caro a partir de R$ ${num(g.caro, 2)}${tem(tk) ? ' · você tem' : ''}`, href: `empresa/${tk}` });
     else if (g.st.startsWith('↓')) itens.push({ tipo: 'compra', ordem: 2, tk, tkLogo: e?.ticker, rotulo: 'Em promoção', titulo: `${tk} abaixo do preço normal`,
-      texto: `R$ ${num(p, 2)} · normal R$ ${num(g.normal, 2)} (${pctSinal(g.normal / p - 1, 0)}) · ${g.pendente ? 'resultado novo ainda fora da base: conferir' : 'lucro intacto pela regra'}${tem(tk) ? ' · você tem' : ''}`, href: `empresa/${tk}` });
+      texto: `R$ ${num(p, 2)} · normal R$ ${num(g.normal, 2)} (${pctSinal(g.normal / p - 1, 0)}) · ${g.pendente ? 'resultado novo ainda fora da base: conferir' : g.conferir ? 'sinal de piora: conferir' : 'lucro intacto pela regra'}${tem(tk) ? ' · você tem' : ''}`, href: `empresa/${tk}` });
     else if (g.st.startsWith('Barata')) itens.push({ tipo: 'conferir', ordem: 3, tk, tkLogo: e?.ticker, rotulo: 'Conferir', titulo: `${tk} barata, mas com tese em dúvida`,
       texto: g.tese.join('; '), href: `empresa/${tk}` });
     const v = variacao(tk, 1);
@@ -515,6 +515,7 @@ function cartaoOportunidade(e) {
     <p class="motivo">${esc(e.motivo)}</p>
     <div class="mini"><span>Qualidade <b>${e.nota_qualidade ?? '–'}</b></span>${e.financeira ? '' : `<span>Saúde <b>${e.nota_saude ?? '–'}</b></span>`}
       <span>Dividendos <b>${pct(e.dy)}</b></span><span>Liquidez <b>${dinheiro(e.liquidez)}/dia</b></span></div>
+    ${e.conferir ? `<span class="selos"><span class="selo selo-conferir" title="Motivos para conferir antes de confiar no desconto">⚠ Conferir: ${esc(e.conferir.replaceAll(' | ', ', '))}</span></span>` : ''}
     ${selos(e)}${(D.config?.oportunidades?.setores_evitar ?? []).includes(e.setor) ? '<span class="selos"><span class="selo">Varejo · nota excepcional</span></span>' : ''}
     ${listaAlertas(e.alertas)}
   </button>`;
@@ -1053,24 +1054,32 @@ function gatilhoAcao(tk, e, p) {
   if (ok(e.dy_3a) && ok(e.dy) && e.dy < 0.5 * e.dy_3a) tese.push('dividendo caiu à metade do normal');
   if (e.payout > 1) tese.push(`pagou mais do que lucrou (payout ${pct(e.payout, 0)}): conte com dividendo menor`);
   if (e.lucro_suspeito) tese.push('lucro com sinal de não recorrente');
-  // Dividendo de 12 meses muito acima do normal: houve pagamento extraordinário (ex.: Marcopolo, 26% contra 5%)
-  if (ok(e.dy) && e.dy_mediana > 0 && e.dy > 2 * e.dy_mediana) {
-    tese.push(`dividendo de 12 meses (${pct(e.dy, 0)}) é ${num(e.dy / e.dy_mediana, 0)} vezes o normal (${pct(e.dy_mediana, 0)}): inclui pagamento extraordinário, não conte com ele daqui para frente`);
-  }
-  // Resultado do trimestre já divulgado, mas a CVM só publica os números no domingo: a regra ainda olha o anterior
+  // Proteções calculadas para todas as empresas (src/calcular.js, campo conferir): resultado novo fora
+  // da base, lucro do trimestre despencando, dividendo extraordinário e queda forte de preço
+  const motivos = (e.conferir ?? '').split(' | ').filter(Boolean);
   const pendente = resultadoForaDaBase(e);
   if (pendente) tese.push(pendente);
+  if (motivos.includes('lucro do último trimestre caiu')) tese.push(`lucro do último trimestre ${pctSinal(e.lucro_tri_var, 0)} contra um ano antes: os 12 meses ainda não mostram toda a piora`);
+  if (motivos.includes('dividendo extraordinário')) tese.push(`dividendo de 12 meses (${pct(e.dy, 0)}) bem acima do normal (${pct(e.dy_mediana, 0)}): inclui pagamento extraordinário, não conte com ele`);
+  if (motivos.includes('queda forte do preço')) tese.push(`caiu ${pct(-e.queda_3m, 0)} em 3 meses (Ibovespa ${pctSinal(e.queda_3m_ibov, 0)}): o mercado pode estar antecipando lucro menor`);
+  const conferirAntes = !!pendente || motivos.some(m => m !== 'dividendo extraordinário');
   const quebrada = tese.some(t => t.startsWith('ROE') || t.startsWith('dividendo caiu'));
   let st;
   if (e.pl >= e.pl_p75) st = ehTrade ? '↑ Cara: realizar o restante' : (e.dy < (e.dy_mediana ?? 0) ? '↑ Cara e com dividendo abaixo do normal: reduzir' : '↑ Cara: parar de aportar');
   else if (e.pl >= e.pl_mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
   else if (e.pl <= e.pl_p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes'
-    : pendente ? '↓ Em promoção, mas falta o resultado novo: conferir antes' : '↓ Em promoção com lucro intacto';
+    : pendente ? '↓ Em promoção, mas falta o resultado novo: conferir antes'
+    : conferirAntes ? '↓ Em promoção, mas com sinal de piora: conferir antes' : '↓ Em promoção com lucro intacto';
   else st = 'Abaixo do normal: segurar';
-  return { normal: alvo(e.pl_mediana), caro: alvo(e.pl_p75), st, tese, ehTrade, pendente: !!pendente };
+  return { normal: alvo(e.pl_mediana), caro: alvo(e.pl_p75), st, tese, ehTrade, pendente: !!pendente, conferir: conferirAntes };
 }
 // Texto de aviso quando o resultado da temporada já saiu (pela agenda) e ainda não está na base
 function resultadoForaDaBase(e) {
+  // Pela entrega à CVM (vale para todas as empresas); a agenda manual cobre se a consulta falhar
+  if (e?.resultado_pendente) {
+    const [tri, dt] = e.resultado_pendente.split('|');
+    return `resultado do ${tri} entregue à CVM em ${data(dt).slice(0, 5)} e só entra na base no domingo: lucro, P/L e preço normal ainda são do trimestre anterior`;
+  }
   const a = e && entradaAgenda(e), hoje = hojeIso();
   if (!a || resumoTrimestre(e)) return null;
   const saiu = a.data < hoje || (a.data === hoje && /antes/.test(a.quando ?? ''));
@@ -1376,7 +1385,7 @@ function montarAtivo(el, ticker) {
       <div class="ativo-numeros ativo-numeros-p" id="a-div-numeros">${numeros([['Dividendos 12m', pct(e.dy)], ['Média de 3 anos', pct(e.dy_3a)], ['Payout 12m', pct(e.payout)],
         ['Pago em 12 meses', dinheiro(e.dividendos_12m)], ['Preço-teto Bazin', ok(tetoBazin) ? `R$ ${num(tetoBazin, 2)}` : '–']])}</div>
       ${e.payout > 1 ? `<div class="aviso">${ICONE_ALERTA}<div>Nos últimos 12 meses pagou mais do que lucrou (payout ${pct(e.payout, 0)}). Conte com dividendo menor à frente.</div></div>` : ''}
-      ${ok(e.dy) && e.dy_mediana > 0 && e.dy > 2 * e.dy_mediana ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Dividendo fora do normal:</strong> os ${pct(e.dy)} dos últimos 12 meses são ${num(e.dy / e.dy_mediana, 0)} vezes a mediana desde 2020 (${pct(e.dy_mediana)}). Inclui pagamento extraordinário ou o preço caiu muito: não use esse percentual como expectativa.</div></div>` : ''}
+      ${(e.conferir ?? '').includes('dividendo extraordinário') ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Dividendo fora do normal:</strong> os ${pct(e.dy)} dos últimos 12 meses são ${num(e.dy / e.dy_mediana, 0)} vezes a mediana desde 2020 (${pct(e.dy_mediana)}). Inclui pagamento extraordinário ou o preço caiu muito: não use esse percentual como expectativa.</div></div>` : ''}
       <div class="graficos"><div class="grafico-bloco"><h3>Proventos por ação, por ano</h3><div class="tile-sub">Dividendos, JCP e rendimentos pela data com, ajustados por desdobramento</div><div class="grafico" id="g-prov-ano"></div></div>
         <div class="grafico-bloco"><h3>Dividend yield por ano</h3><div class="tile-sub">Soma de cada provento ÷ o preço da ação na data com</div><div class="grafico" id="g-dy-ano"></div></div></div>
       <div class="graficos"><div class="grafico-bloco"><h3>Em que meses costuma pagar</h3><div class="tile-sub">Pela data com, nos últimos 5 anos: quanto mais escuro, mais vezes</div><div id="a-meses"></div></div>
@@ -1510,8 +1519,10 @@ function desenharProventos(dados, e) {
   const prov = dados.proventos;
   if (!prov.length) { $('#a-proventos').innerHTML = '<p class="vazio">A B3 não registra proventos para este código.</p>'; return; }
   // Por ano: soma ajustada por ação e yield de cada pagamento sobre o preço da data com
+  // Restituição de capital não é rendimento: aparece na tabela, mas fica fora das somas e do yield
+  const rendimentos = prov.filter(x => x[2] !== 'Restituição de capital');
   const porAno = new Map();
-  for (const x of prov) {
+  for (const x of rendimentos) {
     const a = x[0].slice(0, 4), s = porAno.get(a) ?? { valor: 0, dy: 0 };
     s.valor += x[4];
     if (x[5] > 0) s.dy += x[3] / x[5];
@@ -1530,7 +1541,7 @@ function desenharProventos(dados, e) {
   // Números do topo da seção: último provento e soma de 12 meses
   const ultimo = prov[0];
   const umAno = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10);
-  const soma12 = prov.filter(x => x[0] >= umAno).reduce((s, x) => s + x[4], 0);
+  const soma12 = rendimentos.filter(x => x[0] >= umAno).reduce((s, x) => s + x[4], 0);
   $('#a-div-numeros').insertAdjacentHTML('afterbegin', `<div><span>Último provento</span><b>R$ ${num(ultimo[3], 4)}</b></div>
     <div><span>Data com do último</span><b>${data(ultimo[0])}</b></div><div><span>Por ação em 12 meses</span><b>R$ ${num(soma12, 2)}</b></div>`);
   // Tabela: 15 mais recentes, com botão para ver todos

@@ -11,6 +11,7 @@ import { exportar } from './exportar.js';
 import { atualizarIntraday } from './intraday.js';
 import { atualizarEtfsExternos } from './externos.js';
 import { atualizarProventos } from './proventos.js';
+import { atualizarEntregas } from './entregas.js';
 import { log, anoAtual } from './util.js';
 
 const ANO_INICIO = 2016;
@@ -33,6 +34,8 @@ log({ 'carga-inicial': `Carga inicial desde ${ANO_INICIO}`, intraday: 'Preços d
 
 if (intraday) {
   await etapa('preços do pregão', () => atualizarIntraday(db));
+  // Resultado entregue à CVM hoje: a página avisa que os números ainda são do trimestre anterior
+  try { await atualizarEntregas(db); } catch (e) { log('Entregas à CVM indisponíveis agora:', e.message); }
 } else {
   await etapa('cadastro', () => atualizarCadastro(db, ano));
   if (cargaInicial) {
@@ -55,6 +58,7 @@ if (intraday) {
   await etapa('proventos', () => atualizarProventos(db));
   await etapa('Banco Central', () => atualizarBcb(db, ANO_INICIO));
   await etapa('Tesouro', () => atualizarTesouro(db, ANO_INICIO));
+  await etapa('entregas de resultados à CVM', () => atualizarEntregas(db));
   // Pregão em andamento: junta os preços parciais do dia (fora do pregão não grava nada). Sem isso,
   // uma atualização completa rodada à tarde publicaria o site com os preços de ontem.
   // Falha aqui não deixa a execução vermelha: o preço oficial já foi atualizado acima.

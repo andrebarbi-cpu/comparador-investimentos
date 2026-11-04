@@ -161,7 +161,7 @@ function exportarAtivos(db, empresas) {
   const cot = db.prepare("SELECT data, fechamento FROM cotacoes WHERE ticker = ? AND data >= '2016-01-01' ORDER BY data");
   const prov = db.prepare('SELECT data_com, pagamento, tipo, valor, preco_com FROM proventos WHERE codigo = ? AND classe = ? ORDER BY data_com DESC');
   const evs = db.prepare('SELECT data_com, tipo, fator FROM eventos_acoes WHERE codigo = ? AND classe = ? ORDER BY data_com');
-  const TIPO = { DIVIDENDO: 'Dividendo', 'JRS CAP PROPRIO': 'JCP', RENDIMENTO: 'Rendimento' };
+  const TIPO = { DIVIDENDO: 'Dividendo', 'JRS CAP PROPRIO': 'JCP', RENDIMENTO: 'Rendimento', 'REST CAP DIN': 'Restituição de capital' };
   let n = 0, bytes = 0;
   const resumo = {};
   for (const e of empresas) for (const tk of e.tickers.split(' ')) {

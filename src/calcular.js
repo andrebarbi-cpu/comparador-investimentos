@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { abrirDb, transacao } from './db.js';
 import { log } from './util.js';
 import { criarTabelasProventos, classeTicker, fatorAte } from './proventos.js';
+import { criarTabelaEntregas } from './entregas.js';
 
 const INICIO_MULTIPLOS = '2020-01-01';   // a CVM só publica a quantidade de ações a partir de 2020
 const LIQUIDEZ_MINIMA = 1e6;             // R$ por dia, média de 3 meses
@@ -21,6 +22,9 @@ const ZERO_SE_AUSENTE = new Set(['equivalencia', 'capex', 'dividendos_pagos']);
 const DIA = 86400000;
 const addDias = (iso, n) => new Date(Date.parse(iso) + n * DIA).toISOString().slice(0, 10);
 const menosAnos = (iso, n) => `${Number(iso.slice(0, 4)) - n}${iso.slice(4)}`;
+const menosMeses = (iso, n) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCMonth(d.getUTCMonth() - n); return d.toISOString().slice(0, 10); };
+const rotuloTri = iso => `${Math.ceil(Number(iso.slice(5, 7)) / 3)}T${iso.slice(2, 4)}`;
+const dataBr = iso => iso.slice(0, 10).split('-').reverse().join('/').slice(0, 5);
 const dias = (a, b) => (Date.parse(b) - Date.parse(a)) / DIA;
 const media = xs => { const v = xs.filter(Number.isFinite); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
 const mediana = xs => {
@@ -90,7 +94,7 @@ export function calcular(db) {
   };
 
   // ---------- Empresas ----------
-  const empresas = db.prepare(`SELECT e.cnpj, e.nome, e.setor, e.segmento, e.controle, group_concat(t.ticker) tks
+  const empresas = db.prepare(`SELECT e.cnpj, e.cd_cvm, e.nome, e.setor, e.segmento, e.controle, group_concat(t.ticker) tks
     FROM empresas e JOIN tickers t ON t.cnpj = e.cnpj AND t.tipo = 'acao' GROUP BY e.cnpj`).all();
   const fundStmt = db.prepare('SELECT * FROM fundamentos WHERE cnpj = ? ORDER BY dt_refer, tipo');
   const capitalFre = new Map(db.prepare('SELECT * FROM capital_fre').all().map(r => [r.cnpj, r]));
@@ -101,9 +105,19 @@ export function calcular(db) {
     if (!eventosPorCodigo.has(ev.codigo)) eventosPorCodigo.set(ev.codigo, []);
     eventosPorCodigo.get(ev.codigo).push(ev);
   }
-  // Proventos por ação declarados na B3, por código e classe (ITSA|PN): base do dividend yield
+  // Última entrega de ITR/DFP de cada empresa no sistema da CVM (src/entregas.js): diz se o resultado
+  // novo já saiu e ainda não está nos arquivos abertos, que só são regenerados aos domingos
+  criarTabelaEntregas(db);
+  const ultimaEntrega = new Map();
+  for (const r of db.prepare('SELECT cd_cvm, dt_refer, min(dt_entrega) dt_entrega FROM entregas GROUP BY cd_cvm, dt_refer').all()) {
+    const ex = ultimaEntrega.get(r.cd_cvm);
+    if (!ex || r.dt_refer > ex.dt_refer) ultimaEntrega.set(r.cd_cvm, r);
+  }
+  const serieIbov = series.get('BOVA11');
+  // Proventos por ação declarados na B3, por código e classe (ITSA|PN): base do dividend yield.
+  // Restituição de capital (REST CAP DIN) devolve parte do capital, não é rendimento: fica de fora
   const proventosPorClasse = new Map();
-  for (const p of db.prepare('SELECT codigo, classe, data_com, valor FROM proventos ORDER BY data_com').all()) {
+  for (const p of db.prepare("SELECT codigo, classe, data_com, valor FROM proventos WHERE tipo <> 'REST CAP DIN' ORDER BY data_com").all()) {
     const k = `${p.codigo}|${p.classe}`;
     if (!proventosPorClasse.has(k)) proventosPorClasse.set(k, []);
     proventosPorClasse.get(k).push(p);
@@ -285,6 +299,42 @@ export function calcular(db) {
 
     // Variação de 12 meses do código principal, ajustada por desdobramento, grupamento e bonificação
     // (sem o ajuste, o desdobramento de 1:5 da SBSP3 aparecia como queda de 82%)
+    // ---------- Proteções contra "barata" enganosa (caso Marcopolo, 3T26) ----------
+    // 1) Resultado novo já entregue à CVM e ainda fora da base: tudo acima usa o trimestre anterior
+    const entrega = ultimaEntrega.get(String(Number(emp.cd_cvm)));
+    const resultadoPendente = entrega && entrega.dt_refer > b.dt_refer ? entrega : null;
+    if (resultadoPendente) {
+      alertas.push(`Resultado do ${rotuloTri(resultadoPendente.dt_refer)} entregue à CVM em ${dataBr(resultadoPendente.dt_entrega)} e ainda fora da base (a CVM publica os números aos domingos): lucro, P/L e notas são do trimestre anterior`);
+    }
+    // 2) Lucro do último trimestre muito abaixo do mesmo trimestre do ano anterior: os 12 meses ainda
+    //    escondem a piora
+    const lucroTri = r => {
+      if (!r || r.lucro_contr == null) return null;
+      const mes = r.dt_refer.slice(5, 7);
+      if (mes === '03') return r.lucro_contr;
+      const ant = porRef.get(`${r.dt_refer.slice(0, 4)}-${{ '06': '03-31', '09': '06-30', '12': '09-30' }[mes]}`);
+      return ant?.lucro_contr != null && ant.dt_ini === r.dt_ini ? r.lucro_contr - ant.lucro_contr : null;
+    };
+    const triAtual = lucroTri(b), triAnoAntes = lucroTri(porRef.get(menosAnos(b.dt_refer, 1)));
+    const lucroTriVar = triAtual != null && triAnoAntes > 0 ? triAtual / triAnoAntes - 1 : null;
+    if (lucroTriVar != null && lucroTriVar < -0.3) {
+      alertas.push(`Lucro do ${rotuloTri(b.dt_refer)} foi ${br(-100 * lucroTriVar, 0)}% menor que um ano antes: os 12 meses ainda não mostram toda a piora`);
+    }
+    // 3) Dividendo de 12 meses muito acima do normal: pagamento extraordinário que não se repete
+    const dividendoExtra = m.dy != null && histDy.mediana > 0 && m.dy >= 2.5 * histDy.mediana && m.dy - histDy.mediana >= 0.05;
+    if (dividendoExtra) {
+      alertas.push(`Dividendo de 12 meses (${br(100 * m.dy, 1)}%) é ${br(m.dy / histDy.mediana, 0)} vezes a mediana desde 2020 (${br(100 * histDy.mediana, 1)}%): inclui pagamento extraordinário ou queda forte do preço`);
+    }
+    // 4) Queda forte de preço contra o Ibovespa em 3 meses: o P/L usa o lucro passado e o mercado
+    //    pode estar antecipando lucro menor
+    const var3m = s => { const i = indiceAte(s?.d ?? [], hoje), j = indiceAte(s?.d ?? [], menosMeses(hoje, 3)); return i >= 0 && j >= 0 ? s.p[i] / s.p[j] - 1 : null; };
+    const quedaAcao = var3m(seriePrincipal), quedaIbov = var3m(serieIbov);
+    const quedaRelativa = quedaAcao != null && quedaIbov != null ? quedaAcao - quedaIbov : null;
+    const quedaForte = quedaAcao != null && quedaAcao < -0.25 && quedaRelativa < -0.15;
+    if (quedaForte) {
+      alertas.push(`Ação caiu ${br(-100 * quedaAcao, 0)}% em 3 meses (Ibovespa ${br(100 * quedaIbov, 0)}%): o P/L usa o lucro passado e a queda pode estar antecipando lucro menor`);
+    }
+
     const precoSerie = series.get(tickerPrincipal[0]) ?? serieRef;
     const iHoje = indiceAte(precoSerie.d, hoje), i12 = indiceAte(precoSerie.d, menosAnos(hoje, 1));
     const variacao12m = i12 >= 0 && iHoje >= 0
@@ -327,6 +377,12 @@ export function calcular(db) {
       graham_margem: graham ? graham / precoRef - 1 : null,
       bazin_margem: dy3a != null ? dy3a / 0.06 - 1 : null,
       lucro_suspeito: lucroSuspeito ? 1 : 0,
+      resultado_pendente: resultadoPendente ? `${rotuloTri(resultadoPendente.dt_refer)}|${resultadoPendente.dt_entrega}` : null,
+      lucro_tri_var: lucroTriVar,
+      // Motivos para conferir antes de confiar no "barata": a página troca "lucro intacto" por "conferir"
+      conferir: [resultadoPendente && 'resultado novo fora da base', lucroTriVar != null && lucroTriVar < -0.3 && 'lucro do último trimestre caiu',
+        dividendoExtra && 'dividendo extraordinário', quedaForte && 'queda forte do preço'].filter(Boolean).join(' | ') || null,
+      queda_3m: quedaAcao, queda_3m_ibov: quedaIbov,
       elegivel: liquidez >= LIQUIDEZ_MINIMA && !desatualizado && t.lucro_contr != null ? 1 : 0,
       alertas: alertas.join(' | '),
       acoes_fre: [ajusteFre?.texto, ajusteEventos].filter(Boolean).join(". ") || null,

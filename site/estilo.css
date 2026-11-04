@@ -516,3 +516,6 @@ td.melhor::before { content: "● "; color: var(--destaque); font-size: .7em; ve
   .indicadores .tile-valor { font-size: 1.2rem; }
   .data-bloco { width: 34px; padding-right: 8px; }
 }
+
+/* Oportunidade com motivo para conferir antes (resultado novo fora da base, lucro caindo...) */
+.selo-conferir { white-space: normal; background: color-mix(in srgb, var(--atencao) 16%, var(--superficie)); border-color: color-mix(in srgb, var(--atencao) 45%, transparent); color: var(--texto); }
