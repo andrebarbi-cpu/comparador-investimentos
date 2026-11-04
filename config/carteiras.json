@@ -9,6 +9,7 @@
     {
       "id": "global",
       "nome": "Carteira global e renda fixa",
+      "acoes": ["PSSA3", "TIMS3"],
       "etfs": ["IVVB11"],
       "tesouro": [{ "titulo": "Tesouro IPCA+", "vencimento": "2050-08-15" }],
       "cdb": true
