@@ -73,7 +73,12 @@
     "trade": [
       "BPAC11",
       "BBDC4"
-    ]
+    ],
+    "rebalancear_ivvb": {
+      "_leia": "Só sugere vender IVVB11 para comprar Brasil quando o movimento é expressivo: dólar X acima da mediana de 12 meses OU peso do IVVB11 passando do topo da faixa por Y pontos.",
+      "dolar_acima": 0.15,
+      "peso_acima_da_faixa": 0.05
+    }
   },
   "oportunidades": {
     "_leia": "Setores voláteis que só aparecem nas oportunidades quando a nota é excepcional.",

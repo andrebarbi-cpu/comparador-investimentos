@@ -501,35 +501,41 @@ function blocoGatilhos(c) {
   const partes = [];
   if (c.faixas) partes.push(gatilhosFaixas(c));
   for (const t of c.tesouro ?? []) partes.push(gatilhoTesouro(t));
-  if (c.etfs?.includes('IVVB11')) partes.push(gatilhoDolar());
+  if (c.etfs?.includes('IVVB11')) partes.push(gatilhoDolar(c));
   if (c.acoes?.length) partes.push(gatilhosAcoes(c));
   const corpo = partes.filter(Boolean).join('');
   return corpo ? `<div class="grafico-bloco" style="margin-bottom:12px"><h3>Gatilhos de compra e venda</h3>
     <div class="tile-sub">Regras que vocês definiram (config/carteiras.json). Elas apontam o momento; a decisão é de vocês.</div>${corpo}</div>` : '';
 }
 
-function gatilhosFaixas(c) {
+// Valor de cada classe na parte investida (o CDB até a reserva fica de fora)
+function pesosClasses(c) {
   const reserva = local.reserva?.[c.id] ?? 0;
   const v = { tesouro: 0, global: 0, acoes: 0, cdb: 0 };
   for (const t of c.tesouro ?? []) v.tesouro += (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (infoTesouro(t).pu ?? 0);
   for (const tk of c.etfs ?? []) v.global += (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0);
   if (c.acoes) for (const l of linhasAcoes(c)) v.acoes += l.saldo;
   if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) v.cdb += calcularCdb(cdb).bruto;
-  const municao = Math.max(0, v.cdb - reserva);
-  const investido = v.tesouro + v.global + v.acoes + municao;
+  const valores = { tesouro: v.tesouro, global: v.global, acoes: v.acoes, municao: Math.max(0, v.cdb - reserva) };
+  return { reserva, valores, investido: Object.values(valores).reduce((s, x) => s + x, 0) };
+}
+
+function gatilhosFaixas(c) {
+  const { reserva, valores, investido } = pesosClasses(c);
   const campo = `<label class="tile-sub" style="display:flex;gap:8px;align-items:center;margin:8px 0">Reserva de emergência (fica fora das faixas):
     <input class="campo" type="number" min="0" step="100" data-reserva="${esc(c.id)}" value="${reserva || ''}" placeholder="ex.: 10000" style="width:120px"></label>`;
   if (!investido) return campo;
   const nomes = { tesouro: 'Tesouro longo', global: 'Global (IVVB11)', acoes: 'Ações Brasil', municao: 'Munição (CDB além da reserva)' };
-  const valores = { tesouro: v.tesouro, global: v.global, acoes: v.acoes, municao };
   const linhas = Object.entries(nomes).map(([k, nome]) => {
     const [lo, hi] = c.faixas[k] ?? [];
     const f = valores[k] / investido;
     // Munição funciona ao contrário: acima da faixa é caixa sobrando para usar nas classes abaixo
+    // Munição funciona ao contrário; o IVVB11 só vira "realizar" com movimento expressivo (gatilho do dólar)
     const st = !ok(lo) ? '' : k === 'municao'
       ? (f > hi ? selo('↑ Caixa sobrando: usar nas classes abaixo da faixa') : f < lo ? selo('↓ Pouca munição: recompor antes de comprar') : selo('Dentro da faixa'))
       : f < lo ? selo('↓ Abaixo: direcionar aportes e dividendos para cá')
-      : f > hi ? selo('↑ Acima: realizar parte ou parar de aportar') : selo('Dentro da faixa');
+      : f > hi ? selo(k === 'global' ? '↑ Acima: parar de aportar (vender só com movimento expressivo)' : '↑ Acima: realizar parte ou parar de aportar')
+      : selo('Dentro da faixa');
     return `<tr style="cursor:default"><td class="esq">${nome}</td><td>${dinheiro(valores[k])}</td><td><b>${pct(f, 0)}</b></td>
       <td>${ok(lo) ? `${pct(lo, 0)}–${pct(hi, 0)}` : '–'}</td><td class="esq">${st}</td></tr>`;
   }).join('');
@@ -553,14 +559,23 @@ function gatilhoTesouro(t) {
       Só vale vender se houver ativo barato para onde levar o dinheiro; o ganho paga IR.</p>`;
 }
 
-function gatilhoDolar() {
-  const d = D.macro.dolar, r = D.macro.dolar_12m;
+// Vender IVVB11 para comprar Brasil só com movimento expressivo: dólar muito acima da mediana de
+// 12 meses ou peso do IVVB11 bem acima da faixa. Abaixo disso, o caixa novo resolve sem pagar IR.
+function gatilhoDolar(c) {
+  const d = D.macro.dolar, r = D.macro.dolar_12m, g = REGRAS.rebalancear_ivvb ?? { dolar_acima: 0.15, peso_acima_da_faixa: 0.05 };
   if (!d || !r) return '';
   const acima = d.valor / r.mediana - 1;
+  const { valores, investido } = pesosClasses(c);
+  const peso = investido ? valores.global / investido : null, topo = c.faixas?.global?.[1];
+  const dolarExpressivo = acima >= g.dolar_acima;
+  const pesoExpressivo = ok(peso) && ok(topo) && peso >= topo + g.peso_acima_da_faixa;
+  const st = dolarExpressivo || pesoExpressivo ? selo('↑ Movimento expressivo: rebalancear')
+    : acima > 0.05 ? selo('Dólar alto, mas abaixo do gatilho') : selo('Dólar no normal');
   return `<h3 style="margin-top:12px">IVVB11 e dólar</h3>
-    <p class="tile-sub" style="margin:0">${acima > 0.05 ? selo('↑ Dólar alto: momento de rebalancear') : selo('Dólar no normal')}
-      Dólar a R$ ${num(d.valor, 2)}, ${pctSinal(acima, 0)} contra a mediana de 12 meses (R$ ${num(r.mediana, 2)}; faixa R$ ${num(r.min, 2)}–${num(r.max, 2)}).
-      ${acima > 0.05 ? 'O IVVB11 está valorizado pelo câmbio: se Ações Brasil estiverem abaixo da faixa, vender o excesso do IVVB11 e comprar o que caiu é "vender na alta e comprar na queda" num movimento só (ETF paga 15% de IR sobre o lucro).' : ''}</p>`;
+    <p class="tile-sub" style="margin:0">${st} Dólar a R$ ${num(d.valor, 2)}, ${pctSinal(acima, 0)} contra a mediana de 12 meses
+      (R$ ${num(r.mediana, 2)}; faixa R$ ${num(r.min, 2)}–${num(r.max, 2)}).
+      Gatilho: dólar ${pct(g.dolar_acima, 0)} acima da mediana (R$ ${num(r.mediana * (1 + g.dolar_acima), 2)})${ok(topo) ? ` ou IVVB11 acima de ${pct(topo + g.peso_acima_da_faixa, 0)} da parte investida${ok(peso) ? ` (hoje ${pct(peso, 0)})` : ''}` : ''}.
+      ${dolarExpressivo || pesoExpressivo ? 'Vender o excesso do IVVB11 e comprar o que caiu é "vender na alta e comprar na queda" num movimento só (ETF paga 15% de IR sobre o lucro).' : 'Até lá, aportes novos resolvem sem pagar IR.'}</p>`;
 }
 
 function gatilhosAcoes(c) {
