@@ -6,18 +6,29 @@
   <title>Comparador de Investimentos</title>
   <meta name="description" content="Ações da B3 e ETFs: indicadores, histórico e oportunidades, atualizado todo dia.">
   <meta name="robots" content="noindex">
+  <!-- Tema escolhido no botão: aplicado antes de desenhar, para a tela não piscar -->
+  <script>try { const t = localStorage.getItem('comparador.tema'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="estilo.css">
 </head>
 <body>
   <header class="topo">
     <div class="topo-linha">
-      <h1>Comparador de Investimentos</h1>
-      <p class="atualizado" id="atualizado"></p>
+      <div class="marca">
+        <span class="marca-logo" aria-hidden="true"><svg viewBox="0 0 20 20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15l4.5-5 3.5 3 6-7"/><path d="M13 6h4v4"/></svg></span>
+        <div>
+          <h1>Comparador de Investimentos</h1>
+          <p class="atualizado" id="atualizado"></p>
+        </div>
+      </div>
+      <button class="botao-tema" id="tema" type="button"></button>
     </div>
     <div class="contexto" id="contexto"></div>
     <nav class="abas" id="abas" aria-label="Seções">
       <a href="#oportunidades" data-aba="oportunidades">Oportunidades</a>
-      <a href="#carteiras" data-aba="carteiras">Carteiras</a>
+      <a href="#carteiras" data-aba="carteiras">Carteira</a>
       <a href="#ranking" data-aba="ranking">Ranking</a>
       <a href="#comparar" data-aba="comparar">Comparar</a>
       <a href="#etfs" data-aba="etfs">ETFs e renda fixa</a>

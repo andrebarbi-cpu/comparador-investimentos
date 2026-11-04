@@ -11,7 +11,7 @@ const INICIO_MULTIPLOS = '2020-01-01';   // a CVM só publica a quantidade de a�
 const LIQUIDEZ_MINIMA = 1e6;             // R$ por dia, média de 3 meses
 const BALANCO_MAX_DIAS = 200;            // balanço mais velho que isso tira a empresa do ranking
 const SETORES_FINANCEIROS = /bancos|intermedia[çc][ãa]o financeira|seguradoras|cr[ée]dito imobili[áa]rio|arrendamento/i;
-const ETFS = ['IVVB11', 'WRLD11', 'BOVA11'];
+const ETFS = ['IVVB11', 'WRLD11', 'BOVA11', 'AUVP11', 'AUPO11'];
 const FLUXOS = ['receita', 'lucro_bruto', 'ebit', 'equivalencia', 'da', 'lucro_liq', 'lucro_contr',
   'fco', 'fci', 'capex', 'dividendos_pagos'];
 // Contas que, quando a empresa não tem a linha, valem zero (e não "sem dado")

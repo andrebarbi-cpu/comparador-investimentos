@@ -49,6 +49,26 @@ const horaParcial = D.precos_parciais?.hora
   ? new Date(D.precos_parciais.hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : null;
 const rotuloPrecos = () => D.precos_parciais ? `${data(D.data_precos)} às ${horaParcial ?? '?'} (parcial)` : data(D.data_precos);
 
+// ---------- Tema claro/escuro ----------
+// Sem escolha salva, segue o sistema. Os gráficos usam variáveis de cor, então trocam junto.
+const CHAVE_TEMA = 'comparador.tema';
+const ICONE_SOL = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10" cy="10" r="3.5"/><path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2M4 4l1.4 1.4M14.6 14.6L16 16M4 16l1.4-1.4M14.6 5.4L16 4"/></svg>';
+const ICONE_LUA = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M16.5 12.5A7 7 0 0 1 7.5 3.5a7 7 0 1 0 9 9z"/></svg>';
+const temaAtual = () => document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+function pintarBotaoTema() {
+  const escuro = temaAtual() === 'dark';
+  const b = $('#tema');
+  b.innerHTML = `${escuro ? ICONE_SOL : ICONE_LUA}<span>${escuro ? 'Tema claro' : 'Tema escuro'}</span>`;
+  b.setAttribute('aria-label', escuro ? 'Mudar para o tema claro' : 'Mudar para o tema escuro');
+}
+$('#tema').addEventListener('click', () => {
+  const novo = temaAtual() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = novo;
+  try { localStorage.setItem(CHAVE_TEMA, novo); } catch { /* sem armazenamento: vale só nesta visita */ }
+  pintarBotaoTema();
+});
+pintarBotaoTema();
+
 // ---------- Topo ----------
 function montarTopo() {
   $('#atualizado').textContent = D.precos_parciais
@@ -230,7 +250,12 @@ const CHAVE_LOCAL = 'comparador.carteiras.v1';
 function lerLocal() {
   try {
     const s = JSON.parse(localStorage.getItem(CHAVE_LOCAL));
-    if (s && typeof s === 'object') return { qtd: s.qtd ?? {}, cdbs: s.cdbs ?? [], reserva: s.reserva ?? {} };
+    if (s && typeof s === 'object') {
+      // Antes eram duas carteiras ("dividendos" e "global"); a reserva era da global
+      const reserva = s.reserva ?? {};
+      if (reserva.global && !reserva.principal) reserva.principal = reserva.global;
+      return { qtd: s.qtd ?? {}, cdbs: s.cdbs ?? [], reserva, soTenho: !!s.soTenho };
+    }
   } catch { /* sem acesso ao armazenamento: segue sem quantidades */ }
   return { qtd: {}, cdbs: [], reserva: {} };
 }
@@ -288,9 +313,9 @@ const situacao = e => {
 
 function montarCarteiras(el) {
   el.innerHTML = `
-    <h2>Carteiras</h2>
-    <p class="intro">Acompanhamento dos ativos de vocês. As quantidades ficam salvas só neste aparelho e nunca vão para o
-      site. Para levar para outro celular, use “Gerar link com minhas quantidades” no fim da página.</p>
+    <h2>Carteira</h2>
+    <p class="intro">Todos os ativos que vocês acompanham numa lista só. Cada um preenche as próprias quantidades: elas ficam
+      salvas só neste aparelho e nunca vão para o site. Para levar para outro celular, use “Gerar link com minhas quantidades” no fim da página.</p>
     ${avisoImportacao ? `<div class="aviso" style="border-left-color:var(--destaque)"><div>${esc(avisoImportacao)}</div></div>` : ''}
     ${blocoAgenda()}
     <div id="cart-corpo"></div>
@@ -317,14 +342,17 @@ function montarCarteiras(el) {
 function desenharCarteiras() {
   const corpo = $('#cart-corpo');
   corpo.innerHTML = CARTEIRAS.map(c => `<section class="carteira" data-id="${esc(c.id)}">
-      <h2 style="margin:20px 0 8px">${esc(c.nome)}</h2>
+      <div class="carteira-topo">
+        <label class="tile-sub"><input type="checkbox" data-so-tenho ${local.soTenho ? 'checked' : ''}> Mostrar só o que tenho</label></div>
       <div class="blocos" id="resumo-${esc(c.id)}"></div>
-      ${blocoConcentracao(c)}
-      ${blocoGatilhos(c)}
+      <h3 class="secao">Ativos</h3>
       ${c.acoes?.length ? blocoAcoes(c) : ''}
       ${c.etfs?.length ? blocoEtfs(c) : ''}
       ${c.tesouro?.length ? blocoTesouro(c) : ''}
       ${c.cdb ? blocoCdb() : ''}
+      <h3 class="secao">Análise</h3>
+      ${blocoConcentracao(c)}
+      ${blocoGatilhos(c)}
     </section>`).join('');
   for (const c of CARTEIRAS) resumoCarteira(c);
   for (const i of corpo.querySelectorAll('input.qtd')) i.addEventListener('change', () => {
@@ -349,6 +377,7 @@ function desenharCarteiras() {
     desenharCarteiras();
   });
   ligarCdbs();
+  for (const i of corpo.querySelectorAll('input[data-so-tenho]')) i.addEventListener('change', () => { local.soTenho = i.checked; salvarLocal(); desenharCarteiras(); });
   for (const i of corpo.querySelectorAll('input[data-reserva]')) i.addEventListener('change', () => {
     const v = Number(i.value);
     if (v > 0) local.reserva[i.dataset.reserva] = v; else delete local.reserva[i.dataset.reserva];
@@ -384,7 +413,7 @@ const ordemCarteira = {};
 const colunaCarteira = k => COLUNAS_CARTEIRA.find(c => c.k === k);
 function blocoAcoes(c) {
   const criterios = ordemCarteira[c.id] ?? [];
-  const { linhas, combinado } = ordenarPorCriterios(linhasAcoes(c), criterios, (l, k) => colunaCarteira(k).v(l), k => colunaCarteira(k).texto);
+  const { linhas, combinado } = ordenarPorCriterios(linhasAcoes(c).filter(l => !local.soTenho || l.q > 0), criterios, (l, k) => colunaCarteira(k).v(l), k => colunaCarteira(k).texto);
   const total = linhas.reduce((s, l) => s + l.saldo, 0);
   const aviso = criterios.length ? `<div class="filtros" style="margin:0 0 8px"><span class="contagem" style="margin:0">Ordenando por
     ${esc(descreverCriterios(criterios, k => colunaCarteira(k).r))}${combinado ? ' (posição combinada)' : ''}</span>
@@ -415,7 +444,7 @@ function blocoEtfs(c) {
   return `<div class="tabela-caixa" style="max-height:none;margin-top:12px"><table>
     <thead><tr><th class="esq">ETF</th><th>Qtd.</th><th>Preço</th><th>Dia</th><th>1 mês</th><th>12 meses</th>
       <th>CDI 12m</th><th>Do pico 52s</th><th>Saldo</th></tr></thead>
-    <tbody>${c.etfs.map(tk => {
+    <tbody>${c.etfs.filter(tk => !local.soTenho || local.qtd[tk] > 0).map(tk => {
       const e = etf[tk], q = local.qtd[tk] ?? 0, p = precoAtual(tk) ?? e?.preco;
       return `<tr style="cursor:default"><td class="esq"><b>${esc(tk)}</b></td><td>${campoQtd(tk)}</td><td>R$ ${num(p, 2)}</td>
         <td class="${classeSinal(variacao(tk, 1))}">${pctSinal(variacao(tk, 1))}</td>
@@ -577,15 +606,17 @@ function blocoAgenda() {
     const resumo = e ? resumoTrimestre(e) : null;
     const situacao = resumo ?? (dias > 0 ? `em ${dias} dia${dias > 1 ? 's' : ''}` : dias === 0 ? '<b>hoje</b>'
       : 'divulgado; os números entram na base no domingo seguinte (a CVM atualiza os arquivos aos domingos)');
-    const onde = naCart.get(d.ticker)?.join(', ') ?? 'acompanhando';
+    const onde = local.qtd[d.ticker] > 0 ? 'você tem' : naCart.has(d.ticker) ? 'na lista da carteira' : 'acompanhando';
     return `<tr data-ticker="${esc(d.ticker)}"><td class="esq">${data(d.data)}${d.confirmado ? '' : ' <span class="setor">(a confirmar)</span>'}</td>
       <td class="esq"><b>${esc(d.ticker)}</b><span class="nome">${esc(onde)}</span></td><td class="esq">${esc(d.quando || '–')}</td>
       <td class="esq" style="white-space:normal">${situacao}</td></tr>`;
   }).join('');
-  return `<div class="grafico-bloco" style="margin-bottom:12px"><h3>Agenda de resultados ${esc(AGENDA.trimestre ?? '')}</h3>
+  const proximo = AGENDA.datas.filter(d => interessa.has(d.ticker) && d.data >= hoje).sort((a, b) => a.data.localeCompare(b.data))[0];
+  const titulo = `Agenda de resultados ${esc(AGENDA.trimestre ?? '')}${proximo ? ` · próximo: ${esc(proximo.ticker)} em ${data(proximo.data)}` : ''}`;
+  return `<details class="grafico-bloco agenda" style="margin-bottom:12px"><summary><h3>${titulo}</h3></summary>
     <div class="tile-sub">Datas de calendários de mercado; "a confirmar" quando as fontes divergem. No dia, o preço reage na hora; os números do balanço entram na base no domingo seguinte.</div>
     <div style="overflow-x:auto"><table><thead><tr><th class="esq">Data</th><th class="esq">Empresa</th><th class="esq">Quando</th><th class="esq">Situação</th></tr></thead>
-    <tbody>${linhas}</tbody></table></div></div>`;
+    <tbody>${linhas}</tbody></table></div></details>`;
 }
 
 // ---------- Gatilhos de compra e venda ----------
@@ -677,7 +708,7 @@ function gatilhoDolar(c) {
 
 function gatilhosAcoes(c) {
   const pisos = REGRAS.roe_minimo ?? {}, trade = new Set(REGRAS.trade ?? []);
-  const linhas = c.acoes.map(tk => {
+  const linhas = c.acoes.filter(tk => !local.soTenho || local.qtd[tk] > 0).map(tk => {
     const e = porTicker.get(tk), p = precoAtual(tk) ?? e?.preco;
     if (!e || !ok(e.pl) || e.pl <= 0) return `<tr style="cursor:default"><td class="esq"><b>${esc(tk)}</b></td><td colspan="5" class="vazio esq">Sem lucro positivo: sem faixa de P/L.</td></tr>`;
     // P/L muito acima do próprio "caro" quase sempre é lucro que despencou (prejuízo pontual), não preço alto
@@ -1134,6 +1165,16 @@ async function exportarImagem(no, nome, aviso) {
 
 // ---------- ETFs e renda fixa ----------
 let periodoEtf = 3;
+// O que cada ETF acompanha; a cor segue o ETF (não a posição), para não mudar quando se esconde uma linha
+const ETF_INFO = {
+  IVVB11: { desc: 'S&P 500 (as 500 maiores dos EUA), em reais', cor: 'var(--serie-1)' },
+  WRLD11: { desc: 'Ações do mundo todo, em reais', cor: 'var(--serie-2)' },
+  BOVA11: { desc: 'Ibovespa, referência da bolsa brasileira', cor: 'var(--serie-3)' },
+  AUVP11: { desc: 'Ações brasileiras escolhidas por fundamentos (índice Teva AUVP)', cor: 'var(--serie-5)' },
+  AUPO11: { desc: 'Renda fixa: títulos públicos (índice Teva ITBR Liquidez). Cotação pelo Yahoo, fonte não oficial', cor: 'var(--serie-6)' },
+  CDI: { desc: 'CDI acumulado', cor: 'var(--serie-4)' },
+};
+const etfsNoGrafico = new Set([...Object.keys(ETF_INFO)]);
 const indexador = titulo => /IPCA|Renda\+|Educa\+/.test(titulo) ? 'IPCA + ' : /IGPM/.test(titulo) ? 'IGP-M + ' : /Selic/.test(titulo) ? 'Selic + ' : '';
 function montarEtfs(el) {
   const linhaRet = (r, c) => `${pctSinal(r)}${ok(c) ? `<span class="setor"> · CDI ${pct(c)}</span>` : ''}`;
@@ -1142,14 +1183,13 @@ function montarEtfs(el) {
   const tes = D.tesouro;
   el.innerHTML = `
     <h2>ETFs e renda fixa</h2>
-    <p class="intro">IVVB11 acompanha o S&amp;P 500 (as 500 maiores empresas dos EUA) e WRLD11 o mercado global, ambos
-      em reais: o retorno inclui a variação do dólar (${pctSinal(etf.IVVB11?.dolar_12m)} em 12 meses). BOVA11 é o Ibovespa,
-      para referência. Tudo comparado com o CDI do mesmo período.</p>
+    <p class="intro">Os ETFs de fora do Brasil (IVVB11 e WRLD11) estão em reais, então o retorno inclui a variação do dólar
+      (${pctSinal(etf.IVVB11?.dolar_12m)} em 12 meses). Tudo comparado com o CDI do mesmo período.</p>
     <div class="tabela-caixa" style="max-height:none"><table>
       <thead><tr><th class="esq">ETF</th><th>Preço</th><th>1 mês</th><th>12 meses</th><th>3 anos (a.a.)</th><th>5 anos (a.a.)</th>
         <th title="Quanto o preço está abaixo da máxima das últimas 52 semanas">Do pico 52s</th><th title="Pior queda do pico ao fundo desde o início">Maior queda</th>
         <th title="Volatilidade anualizada dos últimos 12 meses">Volatilidade</th><th>Liquidez/dia</th></tr></thead>
-      <tbody>${D.etfs.map(e => `<tr style="cursor:default"><td class="esq"><b>${e.ticker}</b><span class="nome" style="display:block">desde ${data(e.desde)}</span></td>
+      <tbody>${D.etfs.map(e => `<tr style="cursor:default"><td class="esq" style="white-space:normal;min-width:280px"><b>${e.ticker}</b><span class="nome" style="display:block">${esc(ETF_INFO[e.ticker]?.desc ?? e.nome)} · desde ${data(e.desde)}</span></td>
         <td>R$ ${num(e.preco, 2)}</td><td class="${classeSinal(e.ret_1m)}">${pctSinal(e.ret_1m)}</td>
         <td>${linhaRet(e.ret_12m, e.cdi_12m)}</td><td>${linhaRet(e.ret_3a_aa, e.cdi_3a_aa)}</td><td>${linhaRet(e.ret_5a_aa, e.cdi_5a_aa)}</td>
         <td>${pct(e.distancia_maxima_52s)}</td><td>${pct(e.maior_queda)}</td><td>${pct(e.volatilidade_anual)}</td><td>${dinheiro(e.liquidez)}</td></tr>`).join('')}
@@ -1157,8 +1197,10 @@ function montarEtfs(el) {
     <div class="grafico-bloco" style="margin-top:12px">
       <h3>R$ 100 investidos no início do período</h3>
       <div class="filtros periodos"><span class="segmentado" role="group" aria-label="Período">
-        ${[[1, '1 ano'], [3, '3 anos'], [5, '5 anos'], [10, 'Desde 2016']].map(([a, r]) => `<button data-anos="${a}" aria-pressed="${a === periodoEtf}">${r}</button>`).join('')}
-      </span><span class="contagem" id="etf-nota"></span></div>
+        ${[[0.5, '6 meses'], [1, '1 ano'], [3, '3 anos'], [5, '5 anos'], [10, 'Desde 2016']].map(([a, r]) => `<button data-anos="${a}" aria-pressed="${a === periodoEtf}">${r}</button>`).join('')}
+      </span>
+      <span class="chips" role="group" aria-label="Linhas do gráfico">${Object.keys(ETF_INFO).map(tk => `<button class="chip" data-serie="${tk}" aria-pressed="${etfsNoGrafico.has(tk)}"><i style="background:${ETF_INFO[tk].cor}"></i>${tk}</button>`).join('')}</span>
+      <span class="contagem" id="etf-nota"></span></div>
       <div class="grafico" id="g-etf"></div>
     </div>
     <div class="duas-colunas">
@@ -1179,16 +1221,23 @@ function montarEtfs(el) {
   const desenhar = () => {
     const ultimoMes = D.series.CDI.at(-1)[0];
     const [a, m] = ultimoMes.split('-').map(Number);
-    const inicio = periodoEtf === 10 ? '2016-01' : `${a - periodoEtf}-${String(m).padStart(2, '0')}`;
+    const meses = a * 12 + m - Math.round(periodoEtf * 12);
+    const inicio = periodoEtf === 10 ? '2016-01' : `${Math.floor((meses - 1) / 12)}-${String((meses - 1) % 12 + 1).padStart(2, '0')}`;
     const fora = [];
-    const series = ['IVVB11', 'WRLD11', 'BOVA11', 'CDI'].map((tk, i) => {
+    const series = Object.keys(ETF_INFO).filter(tk => etfsNoGrafico.has(tk)).map(tk => {
       const s = (D.series[tk] ?? []).filter(p => p[0] >= inicio);
       if (!s.length || s[0][0] > inicio) { fora.push(tk); return null; }
-      return { nome: tk, cor: `var(--serie-${i + 1})`, pontos: s.map(p => [p[0], 100 * p[1] / s[0][1]]) };
+      return { nome: tk, cor: ETF_INFO[tk].cor, pontos: s.map(p => [p[0], 100 * p[1] / s[0][1]]) };
     }).filter(Boolean);
     $('#etf-nota').textContent = fora.length ? `${fora.join(', ')} ainda não existia no início do período` : '';
     graficoLinhas($('#g-etf'), { series, fmt: v => `R$ ${num(v, 0)}`, fmtEixo: v => num(v, 0), ref: { y: 100, rotulo: '' }, altura: 280 });
   };
+  for (const b of el.querySelectorAll('[data-serie]')) b.addEventListener('click', () => {
+    const tk = b.dataset.serie;
+    if (etfsNoGrafico.has(tk)) etfsNoGrafico.delete(tk); else etfsNoGrafico.add(tk);
+    b.setAttribute('aria-pressed', etfsNoGrafico.has(tk));
+    desenhar();
+  });
   for (const b of el.querySelectorAll('[data-anos]')) b.addEventListener('click', () => {
     periodoEtf = Number(b.dataset.anos);
     el.querySelectorAll('[data-anos]').forEach(x => x.setAttribute('aria-pressed', x === b));

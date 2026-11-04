@@ -64,6 +64,8 @@ podem ser apagados quando quiser.
 - **Preços do pregão:** às 12h30 e 16h (Brasília) entram preços do Yahoo Finanças com 15 min de
   atraso, marcados como parciais (`cotacoes.parcial = 1`). Fonte não oficial, usada só para preço.
   À noite o arquivo oficial da B3 substitui esses preços e as linhas parciais são apagadas.
+- **ETFs fora do arquivo da B3:** o COTAHIST não traz ETFs de renda fixa. O AUPO11 vem do Yahoo
+  Finanças (`src/externos.js`), só com pregões já fechados oficialmente.
 - Linhas do balanço abaixo do 2º nível não são padronizadas. Capex e dividendos pagos são
   identificados pela descrição da conta, então são aproximações.
 
@@ -92,7 +94,8 @@ podem ser apagados quando quiser.
 
 ## Carteiras (`config/carteiras.json`)
 
-- A lista de ativos acompanhados fica em `config/carteiras.json`. Para incluir ou trocar um ativo,
+- Uma carteira só, com todos os ativos acompanhados (cada pessoa preenche as próprias quantidades;
+  "Mostrar só o que tenho" esconde as linhas zeradas). A lista fica em `config/carteiras.json`. Para incluir ou trocar um ativo,
   edite o arquivo e faça o push: a próxima atualização já mostra.
 - **Quantidades e CDBs nunca vão para o site** (ele é público). Cada pessoa digita no próprio
   aparelho e os números ficam no navegador. O botão "Gerar link com minhas quantidades" cria um

@@ -6,7 +6,7 @@ import { transacao } from './db.js';
 
 const URL_LOTE = 'https://query1.finance.yahoo.com/v7/finance/spark';
 const POR_LOTE = 20;
-const ETFS = ['IVVB11', 'WRLD11', 'BOVA11'];
+const ETFS = ['IVVB11', 'WRLD11', 'BOVA11', 'AUVP11', 'AUPO11'];
 
 // Tickers que importam: em cada empresa, o mais negociado de cada classe (ON, PN, UNIT) nos
 // últimos 3 meses, mais os ETFs. Basta para recalcular valor de mercado e múltiplos.

@@ -1,9 +1,9 @@
 {
-  "_leia": "Ativos acompanhados na aba Carteiras. Só a lista fica aqui (o site é público); quantidades e valores ficam salvos no navegador de cada um.",
+  "_leia": "Ativos acompanhados na aba Carteiras (uma carteira só: cada pessoa preenche as próprias quantidades no aparelho). Só a lista fica aqui (o site é público).",
   "carteiras": [
     {
-      "id": "dividendos",
-      "nome": "Carteira de dividendos",
+      "id": "principal",
+      "nome": "Carteira",
       "acoes": [
         "ITSA4",
         "BBAS3",
@@ -14,14 +14,6 @@
         "TIMS3",
         "VALE3",
         "SAPR4"
-      ]
-    },
-    {
-      "id": "global",
-      "nome": "Carteira global e renda fixa",
-      "acoes": [
-        "PSSA3",
-        "TIMS3"
       ],
       "etfs": [
         "IVVB11"

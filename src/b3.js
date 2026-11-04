@@ -64,7 +64,8 @@ export async function carregarAno(db, ano, { forcar = false } = {}) {
 // Busca os pregões que faltam desde a última data gravada
 export async function atualizarDiario(db) {
   // Preços parciais do dia não contam: o arquivo oficial daquele dia ainda precisa ser baixado
-  const ult = db.prepare('SELECT MAX(data) d FROM cotacoes WHERE parcial IS NULL').get().d;
+  // Referência no BOVA11: só ele garante que a data veio do arquivo oficial (ETFs externos e parciais não contam)
+  const ult = db.prepare("SELECT MAX(data) d FROM cotacoes WHERE ticker = 'BOVA11' AND parcial IS NULL").get().d;
   const agora = new Date();
   if (!ult) return carregarAno(db, agora.getFullYear(), { forcar: true });
 
@@ -87,6 +88,6 @@ export async function atualizarDiario(db) {
   if (!total) log('Cotações: nenhum pregão novo');
   // Parciais de dias que já têm fechamento oficial saem (o oficial já substituiu os mesmos tickers)
   db.prepare(`DELETE FROM cotacoes WHERE parcial = 1
-    AND data <= (SELECT max(data) FROM cotacoes WHERE parcial IS NULL)`).run();
+    AND data <= (SELECT max(data) FROM cotacoes WHERE ticker = 'BOVA11' AND parcial IS NULL)`).run();
   return total;
 }
