@@ -99,6 +99,9 @@ podem ser apagados quando quiser.
   link `#importar/...` que leva os números no trecho depois do `#`, que o navegador não envia ao
   servidor.
 - O CDB é calculado pelo CDI diário do Banco Central, com IR pela tabela regressiva.
+- **Agenda de resultados** (`agenda_resultados`): datas da temporada para as ações das carteiras e as
+  acompanhadas; quando o trimestre entra na base, mostra o lucro contra um ano antes e contra o
+  trimestre anterior. A ficha de cada empresa tem o lucro por trimestre e o próximo resultado.
 - **Gatilhos de compra e venda** (`regras` e `faixas` em `config/carteiras.json`): peso de cada
   classe contra a faixa (a reserva, informada no aparelho, fica fora), taxa de venda do Tesouro,
   dólar contra a mediana de 12 meses (rebalancear o IVVB11) e, por ação, preço "normal" (P/L
@@ -125,5 +128,7 @@ podem ser apagados quando quiser.
    A comparação vira imagem PNG (botão "Salvar/Compartilhar como imagem"); a biblioteca
    html-to-image é baixada da jsDelivr só no clique.
 4. **Automação** – `.github/workflows/atualizar.yml` roda todo dia útil às 20h45, 22h30 e 8h (Brasília),
+   além de domingo ao meio-dia (a CVM só regenera os arquivos de balanço aos domingos: o resultado
+   divulgado na semana entra na base no domingo seguinte),
    guarda o banco como anexo da release `banco` e publica `site/` no GitHub Pages. Para rodar na
    hora: aba Actions → Atualizar dados → Run workflow.

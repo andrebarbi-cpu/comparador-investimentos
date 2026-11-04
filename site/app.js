@@ -247,6 +247,7 @@ function montarCarteiras(el) {
     <p class="intro">Acompanhamento dos ativos de vocês. As quantidades ficam salvas só neste aparelho e nunca vão para o
       site. Para levar para outro celular, use “Gerar link com minhas quantidades” no fim da página.</p>
     ${avisoImportacao ? `<div class="aviso" style="border-left-color:var(--destaque)"><div>${esc(avisoImportacao)}</div></div>` : ''}
+    ${blocoAgenda()}
     <div id="cart-corpo"></div>
     <div class="grafico-bloco" style="margin-top:20px">
       <h3>Levar as quantidades para outro aparelho</h3>
@@ -490,6 +491,60 @@ function resumoCarteira(c) {
       <div class="tile-sub">Pelos preços de ${rotuloPrecos()}</div></div>
     ${c.acoes ? `<div class="bloco"><h3>Renda anual estimada</h3><div class="tile-valor">${dinheiro(renda)}</div>
       <div class="tile-sub">${pct(renda / saldo)} sobre o saldo, pelos dividendos dos últimos 12 meses</div></div>` : ''}`;
+}
+
+// ---------- Agenda de resultados ----------
+// Datas em config/carteiras.json (agenda_resultados). A CVM só atualiza os arquivos abertos aos
+// domingos: o resultado divulgado na semana entra na base no domingo seguinte.
+const AGENDA = D.config?.agenda_resultados ?? { datas: [] };
+const rotuloTrimestre = dtRefer => `${Math.ceil(Number(dtRefer.slice(5, 7)) / 3)}T${dtRefer.slice(2, 4)}`;
+const fimDoTrimestre = rotulo => { // "3T26" -> "2026-09-30"
+  const m = /^(\d)T(\d\d)$/.exec(rotulo ?? '');
+  return m ? `20${m[2]}-${['03-31', '06-30', '09-30', '12-31'][m[1] - 1]}` : null;
+};
+const hojeIso = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+const entradaAgenda = e => AGENDA.datas.find(d => e.tickers.split(' ').includes(d.ticker));
+
+function proximoResultado(e) {
+  const a = entradaAgenda(e);
+  if (!a || a.data < hojeIso()) return '';
+  return `<span class="selo">Resultado ${esc(AGENDA.trimestre ?? '')}: ${data(a.data)}${a.quando ? ' ' + esc(a.quando) : ''}${a.confirmado ? '' : ' (a confirmar)'}</span>`;
+}
+
+// Lucro do trimestre da temporada contra o mesmo trimestre do ano anterior e o anterior
+function resumoTrimestre(e) {
+  const fim = fimDoTrimestre(AGENDA.trimestre);
+  const tri = D.trimestres?.[e.cnpj] ?? [];
+  const i = tri.findIndex(t => t[0] === fim);
+  if (i < 0) return null;
+  const atual = tri[i][1];
+  const anoAntes = tri.find(t => t[0] === `${Number(fim.slice(0, 4)) - 1}${fim.slice(4)}`)?.[1];
+  const anterior = tri[i - 1]?.[1];
+  const varia = (a, b) => ok(a) && ok(b) && b > 0 ? pctSinal(a / b - 1, 0) : '–';
+  return `Lucro ${AGENDA.trimestre}: <b>${dinheiro(atual)}</b> · contra um ano antes ${varia(atual, anoAntes)} · contra o trimestre anterior ${varia(atual, anterior)}`;
+}
+
+function blocoAgenda() {
+  if (!AGENDA.datas.length) return '';
+  const naCart = new Map();
+  for (const c of CARTEIRAS) for (const tk of c.acoes ?? []) naCart.set(tk, [...(naCart.get(tk) ?? []), c.nome]);
+  const interessa = new Set([...naCart.keys(), ...(AGENDA.acompanhar ?? [])]);
+  const hoje = hojeIso();
+  const linhas = AGENDA.datas.filter(d => interessa.has(d.ticker)).sort((a, b) => a.data.localeCompare(b.data)).map(d => {
+    const e = porTicker.get(d.ticker);
+    const dias = Math.round((Date.parse(d.data) - Date.parse(hoje)) / 864e5);
+    const resumo = e ? resumoTrimestre(e) : null;
+    const situacao = resumo ?? (dias > 0 ? `em ${dias} dia${dias > 1 ? 's' : ''}` : dias === 0 ? '<b>hoje</b>'
+      : 'divulgado; os números entram na base no domingo seguinte (a CVM atualiza os arquivos aos domingos)');
+    const onde = naCart.get(d.ticker)?.join(', ') ?? 'acompanhando';
+    return `<tr data-ticker="${esc(d.ticker)}"><td class="esq">${data(d.data)}${d.confirmado ? '' : ' <span class="setor">(a confirmar)</span>'}</td>
+      <td class="esq"><b>${esc(d.ticker)}</b><span class="nome">${esc(onde)}</span></td><td class="esq">${esc(d.quando || '–')}</td>
+      <td class="esq" style="white-space:normal">${situacao}</td></tr>`;
+  }).join('');
+  return `<div class="grafico-bloco" style="margin-bottom:12px"><h3>Agenda de resultados ${esc(AGENDA.trimestre ?? '')}</h3>
+    <div class="tile-sub">Datas de calendários de mercado; "a confirmar" quando as fontes divergem. No dia, o preço reage na hora; os números do balanço entram na base no domingo seguinte.</div>
+    <div style="overflow-x:auto"><table><thead><tr><th class="esq">Data</th><th class="esq">Empresa</th><th class="esq">Quando</th><th class="esq">Situação</th></tr></thead>
+    <tbody>${linhas}</tbody></table></div></div>`;
 }
 
 // ---------- Gatilhos de compra e venda ----------
@@ -771,6 +826,7 @@ function abrirFicha(ticker) {
     ${outros.length ? `<div class="setor">Outros códigos: ${outros.map(esc).join(', ')}</div>` : ''}
     <div class="acoes-ficha">
       <a class="botao botao-principal" href="#comparar/${encodeURIComponent(e.ticker)}">Comparar com outras</a>
+      ${proximoResultado(e)}
       ${selos(e)}
     </div>
     ${e.oportunidade ? `<div class="aviso" style="border-left-color:var(--destaque)"><div><strong>Por que é oportunidade:</strong> ${esc(e.motivo)}.</div></div>` : ''}
@@ -824,6 +880,7 @@ function abrirFicha(ticker) {
       <div class="grafico-bloco"><h3>P/VP mês a mês</h3><div class="tile-sub">Preço sobre patrimônio líquido</div><div class="grafico" id="g-pvp"></div></div>
       <div class="grafico-bloco"><h3>Lucro líquido por ano</h3><div class="tile-sub">Atribuído aos controladores</div><div class="grafico" id="g-lucro"></div></div>
       <div class="grafico-bloco"><h3>${fin ? 'Receitas de intermediação' : 'Receita líquida'} por ano</h3><div class="tile-sub">&nbsp;</div><div class="grafico" id="g-receita"></div></div>
+      <div class="grafico-bloco"><h3>Lucro por trimestre</h3><div class="tile-sub">Cada trimestre isolado, últimos 8</div><div class="grafico" id="g-tri"></div></div>
       <div class="grafico-bloco"><h3>Dividendos e JCP pagos por ano</h3><div class="tile-sub">Pela demonstração de fluxo de caixa</div><div class="grafico" id="g-div"></div></div>
       ${fin ? '' : `<div class="grafico-bloco"><h3>Dívida líquida por ano</h3><div class="tile-sub">Negativa = mais caixa que dívida</div><div class="grafico" id="g-divida"></div></div>`}
     </div>
@@ -843,6 +900,7 @@ function abrirFicha(ticker) {
   graficoColunas($('#g-receita'), { pontos: anos.map(a => [String(a[0]), a[1]]), fmt: dinheiro });
   graficoColunas($('#g-div'), { pontos: anos.map(a => [String(a[0]), a[3]]), fmt: dinheiro });
   if (!fin) graficoColunas($('#g-divida'), { pontos: anos.map(a => [String(a[0]), a[4]]), fmt: dinheiro });
+  graficoColunas($('#g-tri'), { pontos: (D.trimestres?.[e.cnpj] ?? []).slice(-8).map(t => [rotuloTrimestre(t[0]), t[1]]), fmt: dinheiro });
 }
 function fecharFicha() {
   const fundo = $('#ficha-fundo');

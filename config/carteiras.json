@@ -99,5 +99,86 @@
       "valor_mercado_minimo": 5000000000,
       "valor_mercado_minimo_financeiras": 20000000000
     }
+  },
+  "agenda_resultados": {
+    "_leia": "Datas de divulgação do resultado (calendários de InfoMoney, Money Times, BPMoney e Suno). Agregadores divergem às vezes: \"confirmado\": false quando as fontes não batem. Atualizar a cada temporada.",
+    "trimestre": "3T26",
+    "acompanhar": [
+      "BPAC11"
+    ],
+    "datas": [
+      {
+        "ticker": "BBSE3",
+        "data": "2026-11-03",
+        "quando": "após o fechamento",
+        "confirmado": true
+      },
+      {
+        "ticker": "PSSA3",
+        "data": "2026-11-05",
+        "quando": "antes da abertura",
+        "confirmado": true
+      },
+      {
+        "ticker": "TIMS3",
+        "data": "2026-11-09",
+        "quando": "após o fechamento",
+        "confirmado": false
+      },
+      {
+        "ticker": "ITSA4",
+        "data": "2026-11-09",
+        "quando": "",
+        "confirmado": true
+      },
+      {
+        "ticker": "BBAS3",
+        "data": "2026-11-11",
+        "quando": "",
+        "confirmado": false
+      },
+      {
+        "ticker": "BPAC11",
+        "data": "2026-11-12",
+        "quando": "",
+        "confirmado": true
+      },
+      {
+        "ticker": "CPFE3",
+        "data": "2026-11-12",
+        "quando": "após o fechamento",
+        "confirmado": true
+      },
+      {
+        "ticker": "SAPR4",
+        "data": "2026-11-12",
+        "quando": "após o fechamento",
+        "confirmado": true
+      },
+      {
+        "ticker": "CXSE3",
+        "data": "2026-11-12",
+        "quando": "",
+        "confirmado": false
+      },
+      {
+        "ticker": "ITUB4",
+        "data": "2026-11-03",
+        "quando": "",
+        "confirmado": false
+      },
+      {
+        "ticker": "BBDC4",
+        "data": "2026-10-22",
+        "quando": "",
+        "confirmado": true
+      },
+      {
+        "ticker": "VALE3",
+        "data": "2026-10-29",
+        "quando": "",
+        "confirmado": true
+      }
+    ]
   }
 }

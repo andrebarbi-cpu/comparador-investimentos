@@ -75,6 +75,21 @@ export function exportar(db) {
   }
   const cdiDiario = db.prepare("SELECT data, valor FROM macro WHERE serie = 'cdi' ORDER BY data").all().map(r => [r.data, r.valor]);
 
+  // Lucro e receita de cada trimestre isolado (os arquivos da CVM trazem o acumulado do ano):
+  // trimestre = acumulado até ele - acumulado até o anterior do mesmo exercício
+  const trimestres = {};
+  let ant = null;
+  for (const r of db.prepare(`SELECT cnpj, dt_refer, dt_ini, dt_receb, lucro_contr, receita FROM fundamentos
+      WHERE dt_refer >= '2023-01-01' AND cnpj IN (SELECT cnpj FROM indicadores) ORDER BY cnpj, dt_refer`).iterate()) {
+    const mesmoAno = ant && ant.cnpj === r.cnpj && ant.dt_ini === r.dt_ini;
+    const base = mesmoAno ? ant : { lucro_contr: 0, receita: 0 };
+    if (r.dt_ini && r.lucro_contr != null) {
+      (trimestres[r.cnpj] ??= []).push([r.dt_refer, arred(r.lucro_contr - (base.lucro_contr ?? 0)),
+        arred(r.receita != null ? r.receita - (base.receita ?? 0) : null), r.dt_receb]);
+    }
+    ant = r;
+  }
+
   // Preços do dia ainda parciais (pregão em andamento): a página avisa e mostra o horário
   const dataPrecos = empresas[0]?.data ?? null;
   const temParcial = db.prepare('SELECT count(*) n FROM cotacoes WHERE parcial = 1 AND data = ?').get(dataPrecos).n > 0;
@@ -85,7 +100,7 @@ export function exportar(db) {
     data_precos: dataPrecos,
     precos_parciais: temParcial ? { hora: horaParcial } : null,
     macro, tesouro, empresas, historico, anuais, etfs, series,
-    config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario,
+    config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario, trimestres,
   };
   mkdirSync(join(RAIZ, 'site'), { recursive: true });
   const texto = `window.DADOS = ${JSON.stringify(dados)};\n`;

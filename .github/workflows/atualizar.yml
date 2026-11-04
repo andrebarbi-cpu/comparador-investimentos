@@ -11,6 +11,7 @@ on:
     - cron: '45 23 * * 1-5'  # 20h45 de Brasília, logo depois do arquivo de cotações da B3 (~20h30)
     - cron: '30 1 * * 2-6'   # 22h30 de Brasília, reserva caso a anterior atrase
     - cron: '0 11 * * 1-5'   # 8h de Brasília: balanços entregues de madrugada e arquivo atrasado
+    - cron: '0 15 * * 0'     # domingo 12h de Brasília: a CVM regenera os arquivos de balanço aos domingos
   workflow_dispatch:
     inputs:
       modo:
