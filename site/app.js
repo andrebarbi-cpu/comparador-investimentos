@@ -93,6 +93,51 @@ function mostrarAba(nome, arg) {
 }
 const irPara = h => { location.hash = h; };
 
+// ---------- Ordenação por vários critérios ----------
+// Um critério: ordena normalmente. Dois ou mais: cada linha ganha uma posição de 0 a 100 em cada
+// critério (100 = a melhor na direção escolhida) e a lista ordena pela média, para subir quem vai
+// bem em todos ao mesmo tempo. Desempate puro não serviria: P/VP e preço quase nunca empatam.
+// Valor ausente conta como o pior.
+const vazio = v => v == null || v === '' || (typeof v === 'number' && !Number.isFinite(v));
+function ordenarPorCriterios(linhas, criterios, valor, ehTexto) {
+  const comparar = (a, b, k) => ehTexto(k) ? String(a).localeCompare(String(b), 'pt-BR') : a - b;
+  if (criterios.length < 2) {
+    if (!criterios.length) return { linhas, combinado: null };
+    const { k, desc } = criterios[0];
+    return { combinado: null, linhas: [...linhas].sort((a, b) => {
+      const va = valor(a, k), vb = valor(b, k);
+      if (vazio(va)) return 1;
+      if (vazio(vb)) return -1;
+      return desc ? -comparar(va, vb, k) : comparar(va, vb, k);
+    }) };
+  }
+  const soma = new Map(linhas.map(l => [l, 0]));
+  for (const { k, desc } of criterios) {
+    const com = linhas.filter(l => !vazio(valor(l, k))).sort((a, b) => comparar(valor(a, k), valor(b, k), k));
+    // Valores iguais ficam na mesma posição
+    let inicio = 0;
+    com.forEach((l, i) => {
+      if (i > 0 && comparar(valor(com[i - 1], k), valor(l, k), k) !== 0) inicio = i;
+      const p = com.length > 1 ? inicio / (com.length - 1) : 1;
+      soma.set(l, soma.get(l) + (desc ? p : 1 - p));
+    });
+  }
+  const combinado = new Map([...soma].map(([l, s]) => [l, Math.round(100 * s / criterios.length)]));
+  return { combinado, linhas: [...linhas].sort((a, b) => combinado.get(b) - combinado.get(a)) };
+}
+// Clique no título: o 1º inclui o critério, o 2º inverte a direção, o 3º tira
+function alternarCriterio(criterios, k, descPadrao) {
+  const i = criterios.findIndex(c => c.k === k);
+  if (i < 0) return [...criterios, { k, desc: descPadrao, invertido: false }];
+  if (!criterios[i].invertido) return criterios.map((c, j) => (j === i ? { ...c, desc: !c.desc, invertido: true } : c));
+  return criterios.filter((_, j) => j !== i);
+}
+const marcaCriterio = (criterios, k) => {
+  const i = criterios.findIndex(c => c.k === k);
+  return i < 0 ? '' : ` <span class="marca-ordem">${'①②③④⑤⑥⑦⑧⑨'[i] ?? i + 1}${criterios[i].desc ? '↓' : '↑'}</span>`;
+};
+const descreverCriterios = (criterios, rotulo) => criterios.map(c => `${rotulo(c.k)} ${c.desc ? '↓' : '↑'}`).join(' + ');
+
 // ---------- Oportunidades ----------
 // Foco: setores perenes e empresas grandes (confiança no aporte). Valores em config/carteiras.json.
 const REGRA = D.config?.oportunidades ?? {};
@@ -291,12 +336,16 @@ function desenharCarteiras() {
   for (const tr of corpo.querySelectorAll('tr[data-ticker]')) tr.addEventListener('click', ev => {
     if (!ev.target.closest('input')) irPara(`empresa/${tr.dataset.ticker}`);
   });
-  // Clique no título ordena; o segundo clique inverte. Texto começa em A→Z, números do maior para o menor.
+  // Títulos: o 1º clique inclui o critério, o 2º inverte, o 3º tira (vários critérios = posição combinada).
+  // Texto começa em A→Z; números do maior para o menor, menos desconto e situação (o mais barato primeiro).
   for (const th of corpo.querySelectorAll('th[data-ordem]')) th.addEventListener('click', () => {
     const id = th.closest('.carteira').dataset.id, k = th.dataset.ordem;
-    const atual = ordemCarteira[id];
     const col = COLUNAS_CARTEIRA.find(c => c.k === k);
-    ordemCarteira[id] = atual?.k === k ? { k, desc: !atual.desc } : { k, desc: !col.texto && k !== 'situacao' && k !== 'pl' };
+    ordemCarteira[id] = alternarCriterio(ordemCarteira[id] ?? [], k, !col.texto && k !== 'situacao' && k !== 'pl');
+    desenharCarteiras();
+  });
+  for (const b of corpo.querySelectorAll('[data-limpar-ordem]')) b.addEventListener('click', () => {
+    delete ordemCarteira[b.dataset.limparOrdem];
     desenharCarteiras();
   });
   ligarCdbs();
@@ -332,25 +381,17 @@ const COLUNAS_CARTEIRA = [
   { k: 'situacao', r: 'Situação', esq: true, v: l => l.e?.pl_percentil, dica: 'Ordena do mais barato ao mais caro contra o próprio histórico' },
 ];
 const ordemCarteira = {};
-function ordenarLinhas(linhas, id) {
-  const o = ordemCarteira[id];
-  if (!o) return linhas;
-  const col = COLUNAS_CARTEIRA.find(c => c.k === o.k);
-  return [...linhas].sort((a, b) => {
-    const va = col.v(a), vb = col.v(b);
-    if (va == null) return 1;
-    if (vb == null) return -1;
-    const r = col.texto ? String(va).localeCompare(String(vb), 'pt-BR') : va - vb;
-    return o.desc ? -r : r;
-  });
-}
+const colunaCarteira = k => COLUNAS_CARTEIRA.find(c => c.k === k);
 function blocoAcoes(c) {
-  const linhas = ordenarLinhas(linhasAcoes(c), c.id);
+  const criterios = ordemCarteira[c.id] ?? [];
+  const { linhas, combinado } = ordenarPorCriterios(linhasAcoes(c), criterios, (l, k) => colunaCarteira(k).v(l), k => colunaCarteira(k).texto);
   const total = linhas.reduce((s, l) => s + l.saldo, 0);
-  const o = ordemCarteira[c.id];
-  return `<div class="tabela-caixa" style="max-height:none"><table>
+  const aviso = criterios.length ? `<div class="filtros" style="margin:0 0 8px"><span class="contagem" style="margin:0">Ordenando por
+    ${esc(descreverCriterios(criterios, k => colunaCarteira(k).r))}${combinado ? ' (posição combinada)' : ''}</span>
+    <button class="botao" data-limpar-ordem="${esc(c.id)}">Limpar ordenação</button></div>` : '';
+  return `${aviso}<div class="tabela-caixa" style="max-height:none"><table>
     <thead><tr>${COLUNAS_CARTEIRA.map(col => `<th data-ordem="${col.k}" class="${col.esq ? 'esq' : ''}"
-      ${col.dica ? `title="${esc(col.dica)}"` : ''} ${o?.k === col.k ? `aria-sort="${o.desc ? 'descending' : 'ascending'}"` : ''}>${col.r}</th>`).join('')}</tr></thead>
+      ${col.dica ? `title="${esc(col.dica)}"` : ''} ${criterios[0]?.k === col.k ? `aria-sort="${criterios[0].desc ? 'descending' : 'ascending'}"` : ''}>${col.r}${marcaCriterio(criterios, col.k)}</th>`).join('')}${combinado ? '<th>Combinado</th>' : ''}</tr></thead>
     <tbody>${linhas.map(({ tk, e, p, q, saldo, renda }) => `<tr data-ticker="${esc(tk)}">
       <td class="esq empresa"><b>${esc(tk)}</b><span class="nome">${esc(e?.nome ?? '')}</span></td>
       <td>${campoQtd(tk)}</td><td>R$ ${num(p, 2)}</td>
@@ -359,7 +400,7 @@ function blocoAcoes(c) {
       <td>${q ? dinheiro(saldo) : '–'}</td><td>${q && total ? pct(saldo / total, 0) : '–'}</td>
       <td>${pct(e?.dy)}</td><td>${q ? dinheiro(renda) : '–'}</td>
       <td>${ok(e?.pl) && ok(e?.pl_mediana) ? `${num(e.pl)} <span class="setor">× ${num(e.pl_mediana)}</span>` : '–'}</td>
-      <td>${medidor(e?.nota_geral)}</td><td class="esq">${situacao(e)}</td></tr>`).join('')}</tbody>
+      <td>${medidor(e?.nota_geral)}</td><td class="esq">${situacao(e)}</td>${combinado ? `<td>${medidor(combinado.get(linhas.find(l => l.tk === tk)))}</td>` : ''}</tr>`).join('')}</tbody>
   </table></div>
   ${alertasCarteira(linhas)}`;
 }
@@ -733,14 +774,15 @@ const COLUNAS = [
   { k: 'liquidez', r: 'Liquidez/dia', f: v => dinheiro(v), maior: 1 },
   { k: 'selos', r: 'Selos', esq: true, f: (v, e) => selos(e), semOrdem: true },
 ];
-const estadoRanking = { grupo: 'empresas', busca: '', setor: '', liquidez: 1e6, grandes: true, perenes: false, oport: false, graham: false, bazin: false, magica: false, foraRanking: false, ordem: 'nota_geral', desc: true };
+const estadoRanking = { grupo: 'empresas', busca: '', setor: '', liquidez: 1e6, grandes: true, perenes: false, oport: false, graham: false, bazin: false, magica: false, foraRanking: false, ordens: [{ k: 'nota_geral', desc: true, invertido: false }] };
 
 function montarRanking(el) {
   const setores = [...new Set(D.empresas.map(e => e.setor))].filter(Boolean).sort((a, b) => a.localeCompare(b, 'pt-BR'));
   el.innerHTML = `
     <h2>Ranking</h2>
     <p class="intro">Notas de 0 a 100 comparam cada empresa com as demais do mesmo grupo. Bancos e seguradoras têm
-      régua própria (sem EBITDA nem dívida líquida). Clique nos títulos para ordenar e numa linha para abrir a ficha.</p>
+      régua própria (sem EBITDA nem dívida líquida). Clique numa linha para abrir a ficha.</p>
+    <p class="tile-sub" style="margin:-8px 0 12px">Ordenar: clique em um ou mais títulos. O 1º clique inclui o critério, o 2º inverte, o 3º tira. Com dois ou mais, a lista sobe quem vai bem em todos ao mesmo tempo (coluna Combinado).</p>
     <div class="filtros">
       <span class="segmentado" role="group" aria-label="Grupo">
         <button data-grupo="empresas">Empresas</button><button data-grupo="financeiras">Bancos e seguradoras</button>
@@ -760,6 +802,7 @@ function montarRanking(el) {
       <label title="Empresas com pouca liquidez ou balanço atrasado não recebem nota"><input type="checkbox" id="r-fora"> Incluir sem nota</label>
       <span class="contagem" id="r-contagem"></span>
     </div>
+    <div class="filtros" id="r-ordem"></div>
     <div class="tabela-caixa"><table id="r-tabela"><thead></thead><tbody></tbody></table></div>`;
   const s = estadoRanking;
   for (const btn of el.querySelectorAll('[data-grupo]')) btn.addEventListener('click', () => { s.grupo = btn.dataset.grupo; desenharRanking(); });
@@ -769,12 +812,14 @@ function montarRanking(el) {
   for (const [id, k] of [['r-grandes', 'grandes'], ['r-perenes', 'perenes'], ['r-oport', 'oport'], ['r-graham', 'graham'], ['r-bazin', 'bazin'], ['r-magica', 'magica'], ['r-fora', 'foraRanking']])
     $(`#${id}`).addEventListener('change', ev => { s[k] = ev.target.checked; desenharRanking(); });
   $('#r-tabela tbody').addEventListener('click', ev => { const tr = ev.target.closest('tr[data-ticker]'); if (tr) irPara(`empresa/${tr.dataset.ticker}`); });
+  $('#r-ordem').addEventListener('click', ev => { if (ev.target.closest('#r-limpar')) { s.ordens = [{ k: 'nota_geral', desc: true, invertido: false }]; desenharRanking(); } });
   $('#r-tabela tbody').addEventListener('keydown', ev => { const tr = ev.target.closest('tr[data-ticker]'); if (tr && ev.key === 'Enter') irPara(`empresa/${tr.dataset.ticker}`); });
   $('#r-tabela thead').addEventListener('click', ev => {
     const th = ev.target.closest('th[data-k]');
     if (!th) return;
     const col = COLUNAS.find(c => c.k === th.dataset.k);
-    if (s.ordem === col.k) s.desc = !s.desc; else { s.ordem = col.k; s.desc = col.texto ? false : col.maior !== 0; }
+    if (col.semOrdem) return;
+    s.ordens = alternarCriterio(s.ordens, col.k, col.texto ? false : col.maior !== 0);
     desenharRanking();
   });
   desenharRanking();
@@ -790,19 +835,19 @@ function desenharRanking() {
     && (!s.setor || e.setor === s.setor)
     && (!s.busca || e.tickers.includes(s.busca) || e.nome.toUpperCase().includes(s.busca))
     && (!s.oport || e.oportunidade) && (!s.graham || e.selo_graham) && (!s.bazin || e.selo_bazin) && (!s.magica || e.selo_magica));
-  const col = COLUNAS.find(c => c.k === s.ordem) ?? COLUNAS[2];
-  linhas.sort((a, b) => {
-    const va = a[col.k], vb = b[col.k];
-    if (va == null || va === '') return 1;
-    if (vb == null || vb === '') return -1;
-    const r = col.texto ? String(va).localeCompare(String(vb), 'pt-BR') : va - vb;
-    return s.desc ? -r : r;
-  });
-  $('#r-tabela thead').innerHTML = `<tr>${cols.map(c => `<th data-k="${c.k}" class="${c.esq ? 'esq' : ''}" ${c.dica ? `title="${esc(c.dica)}"` : ''}
-    ${c.k === s.ordem ? `aria-sort="${s.desc ? 'descending' : 'ascending'}"` : ''}>${c.r}</th>`).join('')}</tr>`;
-  $('#r-tabela tbody').innerHTML = linhas.map(e => `<tr data-ticker="${esc(e.ticker)}" tabindex="0">${cols.map(c =>
-    `<td class="${c.cls ?? ''} ${c.esq ? 'esq' : ''}">${c.f(e[c.k], e)}</td>`).join('')}</tr>`).join('')
-    || `<tr><td colspan="${cols.length}" class="vazio">Nenhuma empresa com esses filtros.</td></tr>`;
+  // Critérios de colunas escondidas neste grupo (ex.: EV/EBITDA em bancos) não contam
+  const criterios = s.ordens.filter(o => cols.some(c => c.k === o.k));
+  const { linhas: ordenadas, combinado } = ordenarPorCriterios(linhas, criterios, (e, k) => e[k], k => COLUNAS.find(c => c.k === k)?.texto);
+  const rotulo = k => COLUNAS.find(c => c.k === k)?.r ?? k;
+  $('#r-ordem').innerHTML = criterios.length
+    ? `<span class="contagem" style="margin:0">Ordenando por ${esc(descreverCriterios(criterios, rotulo))}${combinado ? ' (posição combinada)' : ''}</span>
+       <button class="botao" id="r-limpar">Limpar ordenação</button>` : '<span class="contagem" style="margin:0">Sem ordenação: clique nos títulos.</span>';
+  const thCombinado = combinado ? '<th title="Média da posição (0 a 100) da empresa em cada critério escolhido">Combinado</th>' : '';
+  $('#r-tabela thead').innerHTML = `<tr>${cols.map((c, i) => `<th data-k="${c.k}" class="${c.esq ? 'esq' : ''}" ${c.dica ? `title="${esc(c.dica)}"` : ''}
+    ${criterios[0]?.k === c.k ? `aria-sort="${criterios[0].desc ? 'descending' : 'ascending'}"` : ''}>${c.r}${marcaCriterio(criterios, c.k)}</th>${i === 0 ? thCombinado : ''}`).join('')}</tr>`;
+  $('#r-tabela tbody').innerHTML = ordenadas.map(e => `<tr data-ticker="${esc(e.ticker)}" tabindex="0">${cols.map((c, i) =>
+    `<td class="${c.cls ?? ''} ${c.esq ? 'esq' : ''}">${c.f(e[c.k], e)}</td>${i === 0 && combinado ? `<td>${medidor(combinado.get(e))}</td>` : ''}`).join('')}</tr>`).join('')
+    || `<tr><td colspan="${cols.length + (combinado ? 1 : 0)}" class="vazio">Nenhuma empresa com esses filtros.</td></tr>`;
   $('#r-contagem').textContent = `${linhas.length} empresas`;
 }
 

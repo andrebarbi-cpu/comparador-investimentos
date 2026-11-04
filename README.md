@@ -125,6 +125,8 @@ podem ser apagados quando quiser.
 2. **Cálculo** – feito
 3. **Página** – feita (`site/`): oportunidades, ranking, ficha da empresa, comparação lado a lado,
    ETFs e renda fixa. Estática, sem dependências; lê `site/dados.js`, gerado por `src/exportar.js`.
+   Tabelas do Ranking e da Carteira ordenam por vários critérios: com dois ou mais, cada empresa
+   recebe a posição (0 a 100) em cada um e a lista ordena pela média (coluna Combinado).
    A comparação vira imagem PNG (botão "Salvar/Compartilhar como imagem"); a biblioteca
    html-to-image é baixada da jsDelivr só no clique.
 4. **Automação** – `.github/workflows/atualizar.yml` roda todo dia útil às 20h45, 22h30 e 8h (Brasília),
