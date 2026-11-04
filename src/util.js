@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, createWriteStream, statSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, createWriteStream, statSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { inflateRawSync, createInflateRaw } from 'node:zlib';
 import { Readable } from 'node:stream';
@@ -21,10 +21,13 @@ export async function baixar(url, nome, { forcar = false, tentativas = 3 } = {})
   mkdirSync(dirname(destino), { recursive: true });
   for (let i = 1; i <= tentativas; i++) {
     try {
-      const resp = await fetch(url);
+      // Sem limite de tempo, um servidor travado prende a execução até estourar os 40 min do GitHub
+      const resp = await fetch(url, { signal: AbortSignal.timeout(10 * 60000) });
       if (resp.status === 404) return null;
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      await pipeline(Readable.fromWeb(resp.body), createWriteStream(destino));
+      // Grava num temporário e só renomeia no fim: download interrompido não fica no cache como se fosse bom
+      await pipeline(Readable.fromWeb(resp.body), createWriteStream(destino + '.tmp'));
+      renameSync(destino + '.tmp', destino);
       return destino;
     } catch (e) {
       if (i === tentativas) throw new Error(`Falha ao baixar ${url}: ${e.message}`);

@@ -27,56 +27,84 @@ async function chamar(metodo, corpo, tentativas = 3) {
   }
 }
 
+// Versão 2 da tabela de proventos: sem chave única, para guardar os lançamentos repetidos exatamente
+// como a B3 publica (a B3SA tem 5 linhas iguais em 30/12/2025; a chave antiga juntava em 3).
+// Cada busca apaga o período que veio e grava de novo, então rodar duas vezes não duplica.
 export function criarTabelasProventos(db) {
+  const versao = db.prepare("SELECT name FROM sqlite_master WHERE name = 'meta'").get()
+    ? db.prepare("SELECT valor FROM meta WHERE chave = 'proventos_versao'").get()?.valor : null;
+  if (versao !== '2') {
+    db.exec('DROP TABLE IF EXISTS proventos');
+    db.prepare("INSERT OR REPLACE INTO meta (chave, valor) VALUES ('proventos_versao', '2')").run();
+  }
   db.exec(`CREATE TABLE IF NOT EXISTS proventos (
-      codigo TEXT, classe TEXT, tipo TEXT, data_com TEXT, aprovado TEXT, valor REAL, preco_com REAL, pagamento TEXT,
-      PRIMARY KEY (codigo, classe, tipo, data_com, aprovado, valor));
+      codigo TEXT, classe TEXT, tipo TEXT, data_com TEXT, aprovado TEXT, valor REAL, preco_com REAL, pagamento TEXT);
+    CREATE INDEX IF NOT EXISTS proventos_codigo ON proventos (codigo, classe, data_com);
     CREATE TABLE IF NOT EXISTS eventos_acoes (
       codigo TEXT, classe TEXT, tipo TEXT, fator REAL, data_com TEXT, aprovado TEXT,
       PRIMARY KEY (codigo, classe, tipo, data_com));`);
 }
 
-// Uma vez por dia. Na primeira vez (ou com completo) busca o histórico inteiro; depois, só a 1ª página.
+// Uma vez por dia. Empresa sem nenhum provento gravado ganha o histórico inteiro; as demais, só a 1ª
+// página (os 120 lançamentos mais recentes), o que cobre mais de um ano em qualquer empresa.
 export async function atualizarProventos(db, { completo = false } = {}) {
   criarTabelasProventos(db);
   const hoje = new Date().toISOString().slice(0, 10);
   const ultima = db.prepare("SELECT valor FROM meta WHERE chave = 'proventos_data'").get()?.valor;
-  const vazio = db.prepare('SELECT count(*) n FROM proventos').get().n === 0;
-  if (!completo && !vazio && ultima === hoje) { log('Proventos já atualizados hoje'); return; }
-  const tudo = completo || vazio;
+  if (!completo && ultima === hoje) { log('Proventos já atualizados hoje'); return; }
+  // Só prefixos negociados no último mês: códigos antigos (ELET, CCRO...) a B3 já não reconhece,
+  // e o histórico deles aparece pelo código novo (AXIA, MOTV...)
   const codigos = db.prepare(`SELECT DISTINCT substr(t.ticker, 1, 4) c FROM tickers t
-    WHERE t.tipo = 'acao' AND t.cnpj IN (SELECT cnpj FROM indicadores) ORDER BY c`).all().map(r => r.c);
-  log(`Proventos da B3: ${codigos.length} empresas${tudo ? ' (histórico completo)' : ''}`);
+    WHERE t.tipo = 'acao' AND t.ticker IN (SELECT DISTINCT ticker FROM cotacoes WHERE data >= date('now', '-30 day'))
+    ORDER BY c`).all().map(r => r.c);
+  const comHistorico = new Set(db.prepare('SELECT DISTINCT codigo FROM proventos').all().map(r => r.codigo));
+  log(`Proventos da B3: ${codigos.length} empresas${completo ? ' (histórico completo)' : `, ${codigos.filter(c => !comHistorico.has(c)).length} com histórico completo`}`);
 
   const insProv = db.prepare(`INSERT INTO proventos (codigo, classe, tipo, data_com, aprovado, valor, preco_com, pagamento)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET preco_com = excluded.preco_com,
-    pagamento = coalesce(excluded.pagamento, proventos.pagamento)`);
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  const pagamentoAntigo = db.prepare(`SELECT pagamento FROM proventos WHERE codigo = ? AND classe = ? AND tipo = ? AND data_com = ?
+    AND abs(valor - ?) < 1e-9 AND pagamento IS NOT NULL LIMIT 1`);
   const insEvento = db.prepare(`INSERT OR REPLACE INTO eventos_acoes (codigo, classe, tipo, fator, data_com, aprovado) VALUES (?, ?, ?, ?, ?, ?)`);
   let feitas = 0, erros = 0, linhas = 0;
+  const semCadastro = [];
 
   async function umaEmpresa(codigo) {
     const sup = (await chamar('GetListedSupplementCompany', { issuingCompany: codigo, language: 'pt-br' }))?.[0];
-    if (!sup?.tradingName) return;
+    if (!sup?.tradingName) { semCadastro.push(codigo); return; }
+    const tudo = completo || !comHistorico.has(codigo);
     // Data de pagamento só vem nos proventos recentes do complemento
     const pagamentos = new Map();
     for (const c of sup.cashDividends ?? []) {
       const classe = classeIsin(c.isinCode);
       if (classe) pagamentos.set(`${classe}|${dataIso(c.lastDatePrior)}|${c.label}|${numero(c.rate).toFixed(6)}`, dataIso(c.paymentDate));
     }
+    // A B3 não acha o nome de pregão com "/" ("AMBEV S/A" volta vazio, "AMBEVSA" traz tudo)
+    const nome = sup.tradingName.replace(/[^A-Za-z0-9]/g, '');
     const resultados = [];
     for (let pagina = 1; ; pagina++) {
-      const r = await chamar('GetListedCashDividends', { language: 'pt-br', pageNumber: pagina, pageSize: 120, tradingName: sup.tradingName });
+      const r = await chamar('GetListedCashDividends', { language: 'pt-br', pageNumber: pagina, pageSize: 120, tradingName: nome });
       resultados.push(...(r?.results ?? []));
       if (!tudo || !r?.page?.totalPages || pagina >= r.page.totalPages) break;
     }
+    const validos = resultados.map(p => ({ p, dataCom: dataIso(p.lastDatePriorEx), valor: numero(p.valueCash) }))
+      .filter(x => x.dataCom && x.valor > 0);
     db.exec('BEGIN');
     try {
-      for (const p of resultados) {
-        const dataCom = dataIso(p.lastDatePriorEx), valor = numero(p.valueCash);
-        if (!dataCom || !(valor > 0)) continue;
-        const pag = pagamentos.get(`${p.typeStock}|${dataCom}|${p.corporateAction}|${valor.toFixed(6)}`) ?? null;
-        insProv.run(codigo, p.typeStock, p.corporateAction, dataCom, dataIso(p.dateApproval), valor, numero(p.closingPricePriorExDate), pag);
-        linhas++;
+      if (validos.length) {
+        // Troca o período coberto por esta busca (tudo, ou desde a data com mais antiga da 1ª página)
+        const desde = tudo ? '0000' : validos.reduce((m, x) => (x.dataCom < m ? x.dataCom : m), '9999');
+        const antigos = new Map();
+        for (const x of validos) {
+          const k = `${x.p.typeStock}|${x.p.corporateAction}|${x.dataCom}|${x.valor}`;
+          if (!antigos.has(k)) antigos.set(k, pagamentoAntigo.get(codigo, x.p.typeStock, x.p.corporateAction, x.dataCom, x.valor)?.pagamento ?? null);
+        }
+        db.prepare('DELETE FROM proventos WHERE codigo = ? AND data_com >= ?').run(codigo, desde);
+        for (const { p, dataCom, valor } of validos) {
+          const pag = pagamentos.get(`${p.typeStock}|${dataCom}|${p.corporateAction}|${valor.toFixed(6)}`)
+            ?? antigos.get(`${p.typeStock}|${p.corporateAction}|${dataCom}|${valor}`) ?? null;
+          insProv.run(codigo, p.typeStock, p.corporateAction, dataCom, dataIso(p.dateApproval), valor, numero(p.closingPricePriorExDate), pag);
+          linhas++;
+        }
       }
       for (const ev of sup.stockDividends ?? []) {
         const classe = classeIsin(ev.isinCode), dataCom = dataIso(ev.lastDatePrior);
@@ -96,7 +124,8 @@ export async function atualizarProventos(db, { completo = false } = {}) {
       try { await umaEmpresa(c); feitas++; } catch (e) { erros++; log(`Proventos ${c}: ${e.message}`); }
     }
   }));
-  log(`Proventos: ${feitas} empresas, ${linhas} registros${erros ? `, ${erros} com erro` : ''}`);
+  log(`Proventos: ${feitas - semCadastro.length} empresas, ${linhas} registros${erros ? `, ${erros} com erro` : ''}`
+    + (semCadastro.length ? `; sem cadastro na B3: ${semCadastro.join(', ')}` : ''));
   if (erros > codigos.length / 2) throw new Error(`B3 falhou em ${erros} de ${codigos.length} empresas`);
   db.prepare("INSERT OR REPLACE INTO meta (chave, valor) VALUES ('proventos_data', ?)").run(hoje);
 }

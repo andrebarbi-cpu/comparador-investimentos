@@ -39,7 +39,7 @@ async function atualizarSerie(db, serie, cod, anoInicio) {
     // A API do BC devolve 502/503 de vez em quando; tenta de novo antes de desistir
     let resp;
     for (let i = 1; i <= 4; i++) {
-      resp = await fetch(url);
+      resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
       if (resp.status < 500) break;
       await new Promise(r => setTimeout(r, 3000 * i));
     }

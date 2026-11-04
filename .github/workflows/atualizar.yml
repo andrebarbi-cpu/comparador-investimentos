@@ -24,6 +24,7 @@ permissions:
   contents: write   # anexar o banco à release
   pages: write
   id-token: write
+  actions: write    # manter os agendamentos ativos (ver o último passo)
 
 concurrency:
   group: atualizar
@@ -60,20 +61,28 @@ jobs:
       - name: Testar acesso às fontes
         run: |
           for url in \
-            https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A2026.ZIP \
+            "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A$(date +%Y).ZIP" \
             https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv \
             "https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/1?formato=json"; do
             echo "$(curl -s -o /dev/null -I -m 30 -w '%{http_code}' "$url") $url"
           done
 
+      # Release inexistente (primeira vez) leva à carga inicial; qualquer outra falha para a execução,
+      # para um banco vazio nunca ser guardado por cima do bom
       - name: Baixar o banco atual
         if: steps.modo.outputs.modo != 'carga-inicial'
         run: |
           mkdir -p dados
-          if gh release download banco --pattern comparador.db.gz --dir dados; then
+          if saida=$(gh api "repos/${{ github.repository }}/releases/tags/banco" 2>&1); then
+            gh release download banco --pattern comparador.db.gz --dir dados
+            cp dados/comparador.db.gz dados/comparador-anterior.db.gz
             gunzip -f dados/comparador.db.gz
+            gunzip -kf dados/comparador-anterior.db.gz
+          elif echo "$saida" | grep -q "HTTP 404"; then
+            echo "Release do banco não existe; será feita a carga inicial"
           else
-            echo "Banco não encontrado; será feita a carga inicial"
+            echo "::error::Não foi possível consultar a release do banco: $saida"
+            exit 1
           fi
 
       - name: Atualizar
@@ -85,12 +94,20 @@ jobs:
             *) if [ -f dados/comparador.db ]; then npm run atualizar; else npm run carga-inicial; fi ;;
           esac || echo "falhou=1" >> "$GITHUB_OUTPUT"
 
+      # Banco vazio ou menor que o anterior é reprovado: a execução para aqui e o site fica como estava
+      - name: Conferir o banco
+        run: node --disable-warning=ExperimentalWarning src/conferir.js dados/comparador.db dados/comparador-anterior.db
+
+      # Guarda o novo e, ao lado, a versão anterior (cópia de segurança de um dia)
       - name: Guardar o banco
         run: |
           gzip -kf dados/comparador.db
           gh release view banco >/dev/null 2>&1 \
             || gh release create banco --title "Banco de dados" --notes "Banco SQLite atualizado automaticamente. Não apagar."
           gh release upload banco dados/comparador.db.gz --clobber
+          if [ -f dados/comparador-anterior.db.gz ] && [ "${{ steps.modo.outputs.modo }}" = "diaria" ]; then
+            gh release upload banco dados/comparador-anterior.db.gz --clobber
+          fi
 
       # Número da execução nos links dos arquivos: o navegador baixa a versão nova em vez da guardada
       - name: Versionar arquivos da página
@@ -113,6 +130,13 @@ jobs:
       - id: publicar2
         if: steps.publicar.outcome == 'failure'
         uses: actions/deploy-pages@v4
+
+      # Em repositório público o GitHub desliga os agendamentos depois de 60 dias sem commit; reativar
+      # o workflow pela API aos domingos zera essa contagem sem precisar de commit
+      - name: Manter os agendamentos ativos
+        if: github.event.schedule == '0 15 * * 0'
+        continue-on-error: true
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/atualizar.yml/enable"
 
       # Alguma fonte falhou: os dados que deram certo já foram salvos e publicados,
       # mas a execução fica vermelha para o GitHub avisar por e-mail

@@ -75,10 +75,16 @@ export function exportar(db) {
   const config = JSON.parse(readFileSync(join(RAIZ, 'config', 'carteiras.json'), 'utf8'));
   const acompanhados = [...new Set(config.carteiras.flatMap(c => [...(c.acoes ?? []), ...(c.etfs ?? [])]))];
   const desde = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
+  // Ajustadas por desdobramento, grupamento e bonificação: a variação de 12 meses e a do dia não saltam
+  criarTabelasProventos(db);
+  const hojeB3 = db.prepare("SELECT max(data) d FROM cotacoes WHERE ticker = 'BOVA11'").get().d;
+  const evsTk = db.prepare('SELECT data_com, tipo, fator FROM eventos_acoes WHERE codigo = ? AND classe = ? ORDER BY data_com');
   const precos = {};
   for (const tk of acompanhados) {
+    // Evento anunciado com data com ainda por vir não muda o preço de hoje
+    const eventos = classeTicker(tk) ? evsTk.all(tk.slice(0, 4), classeTicker(tk)).filter(ev => ev.data_com < hojeB3) : [];
     precos[tk] = db.prepare('SELECT data, fechamento FROM cotacoes WHERE ticker = ? AND data >= ? ORDER BY data')
-      .all(tk, desde).map(r => [r.data, r.fechamento]);
+      .all(tk, desde).map(r => [r.data, arred(r.fechamento / fatorAte(eventos, r.data))]);
   }
   const tesouroSeries = {};
   for (const t of config.carteiras.flatMap(c => c.tesouro ?? [])) {
@@ -107,18 +113,21 @@ export function exportar(db) {
   const temParcial = db.prepare('SELECT count(*) n FROM cotacoes WHERE parcial = 1 AND data = ?').get(dataPrecos).n > 0;
   const horaParcial = temParcial ? db.prepare("SELECT valor FROM meta WHERE chave = 'intraday_hora'").get()?.valor ?? null : null;
 
+  // Arquivos por ativo e, de cada código (inclusive os secundários, como ALUP4 e ALUP3), o último
+  // preço e as variações do dia e de 12 meses: a página do ativo usa o preço do código aberto
+  const tickers = exportarAtivos(db, empresas);
+
   const dados = {
     gerado_em: new Date().toISOString(),
     data_precos: dataPrecos,
     precos_parciais: temParcial ? { hora: horaParcial } : null,
     macro, tesouro, empresas, historico, anuais, etfs, series,
-    config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario, trimestres,
+    config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario, trimestres, tickers,
   };
   mkdirSync(join(RAIZ, 'site'), { recursive: true });
   const texto = `window.DADOS = ${JSON.stringify(dados)};\n`;
   writeFileSync(join(RAIZ, 'site', 'dados.js'), texto);
   log(`Exportado site/dados.js (${(texto.length / 1024).toFixed(0)} KB)`);
-  exportarAtivos(db, empresas);
 }
 
 // Um arquivo por código de negociação (site/ativos/ITSA4.json), lido pela página do ativo só quando
@@ -126,6 +135,7 @@ export function exportar(db) {
 //   precos: [data, fechamento ajustado]
 //   proventos: [data com, pagamento, tipo, valor como declarado, valor ajustado, preço na data com]
 //   eventos: [data com, tipo, fator]
+// Devolve { código: [último preço, variação do dia, variação de 12 meses, data] } (ajustados por eventos)
 function exportarAtivos(db, empresas) {
   criarTabelasProventos(db);
   const pasta = join(RAIZ, 'site', 'ativos');
@@ -136,11 +146,12 @@ function exportarAtivos(db, empresas) {
   const evs = db.prepare('SELECT data_com, tipo, fator FROM eventos_acoes WHERE codigo = ? AND classe = ? ORDER BY data_com');
   const TIPO = { DIVIDENDO: 'Dividendo', 'JRS CAP PROPRIO': 'JCP', RENDIMENTO: 'Rendimento' };
   let n = 0, bytes = 0;
+  const resumo = {};
   for (const e of empresas) for (const tk of e.tickers.split(' ')) {
     const precos = cot.all(tk);
     if (precos.length < 2) continue;
     const codigo = tk.slice(0, 4), classe = classeTicker(tk);
-    const eventos = classe ? evs.all(codigo, classe) : [];
+    const eventos = classe ? evs.all(codigo, classe).filter(ev => ev.data_com < precos.at(-1).data) : [];
     const proventos = classe ? prov.all(codigo, classe) : [];
     const ajusta = d => fatorAte(eventos, d);
     const dados = {
@@ -149,11 +160,16 @@ function exportarAtivos(db, empresas) {
       proventos: proventos.map(p => [p.data_com, p.pagamento, TIPO[p.tipo] ?? p.tipo, arred(p.valor), arred(p.valor / ajusta(p.data_com)), p.preco_com]),
       eventos: eventos.map(ev => [ev.data_com, ev.tipo, ev.fator]),
     };
+    const aj = dados.precos, ult = aj.at(-1);
+    const umAno = new Date(Date.parse(ult[0]) - 365 * 864e5).toISOString().slice(0, 10);
+    const ha12 = aj.findLast(p => p[0] <= umAno);
+    resumo[tk] = [precos.at(-1).fechamento, arred(ult[1] / aj.at(-2)[1] - 1), ha12 ? arred(ult[1] / ha12[1] - 1) : null, ult[0]];
     const txt = JSON.stringify(dados);
     writeFileSync(join(pasta, `${tk}.json`), txt);
     n++; bytes += txt.length;
   }
   log(`Exportados ${n} arquivos de ativos (${(bytes / 1048576).toFixed(1)} MB)`);
+  return resumo;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

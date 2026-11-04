@@ -71,8 +71,13 @@ export async function atualizarDiario(db) {
 
   const desde = new Date(ult + 'T12:00:00Z');
   const diasFaltando = Math.round((agora - desde) / 86400000);
-  // Muito atrasado: mais rápido pegar o arquivo anual do ano corrente
-  if (diasFaltando > 25) return carregarAno(db, agora.getFullYear(), { forcar: true });
+  // Muito atrasado: mais rápido pegar os arquivos anuais, desde o ano do último pregão gravado
+  // (uma parada que atravessa o Ano-Novo deixaria dezembro faltando se só o ano corrente fosse lido)
+  if (diasFaltando > 25) {
+    let n = 0;
+    for (let a = Number(ult.slice(0, 4)); a <= agora.getFullYear(); a++) n += (await carregarAno(db, a, { forcar: true })) ?? 0;
+    return n;
+  }
 
   let total = 0;
   for (let d = new Date(desde.getTime() + 86400000); d <= agora; d = new Date(d.getTime() + 86400000)) {

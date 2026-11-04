@@ -134,8 +134,10 @@ export function transacao(db, fn) {
 
 // Diz se a versão remota de um arquivo mudou desde a última vez que foi processado
 export async function arquivoMudou(db, url) {
-  const resp = await fetch(url, { method: 'HEAD' });
-  if (!resp.ok) return { mudou: false, existe: false };
+  const resp = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(60000) });
+  // Só 404 quer dizer que o arquivo não existe (ex.: ano que ainda não começou); outro erro é a CVM fora do ar
+  if (resp.status === 404) return { mudou: false, existe: false };
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ao consultar ${url}`);
   const modificado = resp.headers.get('last-modified') ?? '';
   const salvo = db.prepare('SELECT modificado FROM arquivos WHERE url = ?').get(url);
   return { mudou: !salvo || salvo.modificado !== modificado, existe: true, modificado };

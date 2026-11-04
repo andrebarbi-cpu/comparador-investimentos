@@ -16,7 +16,7 @@ export async function atualizarEtfsExternos(db) {
   for (const tk of ETFS_EXTERNOS) {
     const temHistorico = db.prepare('SELECT count(*) n FROM cotacoes WHERE ticker = ?').get(tk).n > 0;
     const resp = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${tk}.SA?range=${temHistorico ? '1mo' : '5y'}&interval=1d`,
-      { headers: { 'user-agent': 'Mozilla/5.0' } });
+      { headers: { 'user-agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(60000) });
     if (!resp.ok) throw new Error(`${tk}: HTTP ${resp.status}`);
     const r = (await resp.json()).chart?.result?.[0];
     if (!r?.timestamp) throw new Error(`${tk}: sem dados`);

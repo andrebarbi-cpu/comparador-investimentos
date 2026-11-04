@@ -32,7 +32,9 @@ export async function atualizarCadastro(db, anoFim) {
     const zipArq = await baixar(zipUrl, `cvm/fca_cia_aberta_${ano}.zip`, { forcar: ano === anoFim });
     if (!zipArq) continue;
     const zip = abrirZip(zipArq);
-    for (const r of lerCsv(zip.texto(`fca_cia_aberta_valor_mobiliario_${ano}.csv`))) {
+    const valores = zip.texto(`fca_cia_aberta_valor_mobiliario_${ano}.csv`);
+    if (!valores) throw new Error(`FCA ${ano}: o zip da CVM veio sem a lista de valores mobiliários`);
+    for (const r of lerCsv(valores)) {
       const cod = (r.Codigo_Negociacao ?? '').trim().toUpperCase();
       // Ticker começa com letra (B3SA3 tem dígito no meio; o "000000" do BTG não é ticker)
       if ((r.Mercado && r.Mercado !== 'Bolsa') || !/^[A-Z][A-Z0-9]{3}\d{1,2}$/.test(cod)) continue;
@@ -63,6 +65,10 @@ export async function atualizarCadastro(db, anoFim) {
     }
   }
 
+  // A lista de tickers é apagada e refeita abaixo: com poucos códigos, algo veio errado da CVM
+  if (tickers.size < 200 || porCnpj.size < 300) {
+    throw new Error(`Cadastro suspeito (${porCnpj.size} empresas, ${tickers.size} tickers): a lista atual foi mantida`);
+  }
   transacao(db, () => {
     const insEmp = db.prepare(`INSERT INTO empresas (cnpj, cd_cvm, nome, setor, situacao, controle, segmento)
       VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(cnpj) DO UPDATE SET cd_cvm=excluded.cd_cvm, nome=excluded.nome,
@@ -126,7 +132,10 @@ export async function atualizarDemonstracoes(db, tipo, ano, { soSeMudou = false 
 
   // 1) Índice: versão mais recente de cada (empresa, data de referência)
   const recs = new Map();
-  for (const r of lerCsv(zip.texto(`${t}_cia_aberta_${ano}.csv`))) {
+  // Sem o índice o arquivo não serve: falha em vez de marcar como processado com zero linhas
+  const indice = zip.texto(`${t}_cia_aberta_${ano}.csv`);
+  if (!indice) throw new Error(`${tipo} ${ano}: o zip da CVM veio sem ${t}_cia_aberta_${ano}.csv`);
+  for (const r of lerCsv(indice)) {
     const chave = `${r.CNPJ_CIA}|${r.DT_REFER}`;
     const versao = Number(r.VERSAO);
     const atual = recs.get(chave);
@@ -220,6 +229,7 @@ function extrairCampos(c, outro) {
     return contas.length ? contas.filter(x => x.vl < 0).reduce((s, x) => s - x.vl, 0) : null;
   };
   const DIVIDENDOS = /dividendo|juros sobre (o )?capital|jcp|provento|remunera[çc][ãa]o aos acionistas/i;
+  const NAO_CONTROLADOR = /n[ãa]o.?controlador|minorit[áa]ri/i;
 
   // Patrimônio líquido: a conta de 2º nível do passivo chamada "Patrimônio Líquido..."
   const contaPl = filhos('BPP', '2').find(x => /patrim[ôo]nio l[íi]quido/i.test(x.ds));
@@ -253,8 +263,11 @@ function extrairCampos(c, outro) {
     fci: v('DFC', '6.02'),
     fcf: v('DFC', '6.03'),
     capex: c.DFC ? (somaAbsNegativos(fluxoInv, /imobilizado|intang[íi]vel/i) ?? 0) : null,
-    dividendos_pagos: c.DFC ? (somaAbsNegativos(fluxoFin, DIVIDENDOS)
-      ?? somaAbsNegativos(filhosDe(outro?.DFC, '6.03'), DIVIDENDOS) ?? 0) : null,
+    // Proventos pagos aos acionistas da própria empresa: vêm do fluxo de caixa individual (controladora).
+    // O consolidado soma o que as controladas pagam aos sócios minoritários delas e infla o dividend
+    // yield de holdings (GOAU, EQTL, ALUP); ele só vale quando não há individual, e sem essas linhas.
+    dividendos_pagos: c.DFC || outro?.DFC ? (somaAbsNegativos(filhosDe(outro?.DFC, '6.03'), DIVIDENDOS)
+      ?? somaAbsNegativos(fluxoFin.filter(x => !NAO_CONTROLADOR.test(x.ds)), DIVIDENDOS) ?? 0) : null,
     ativo_total: v('BPA', '1'),
     ativo_circ: v('BPA', '1.01', /circulante/i),
     caixa: caixa || null,

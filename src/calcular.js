@@ -6,6 +6,7 @@
 import { pathToFileURL } from 'node:url';
 import { abrirDb, transacao } from './db.js';
 import { log } from './util.js';
+import { criarTabelasProventos, classeTicker, fatorAte } from './proventos.js';
 
 const INICIO_MULTIPLOS = '2020-01-01';   // a CVM só publica a quantidade de ações a partir de 2020
 const LIQUIDEZ_MINIMA = 1e6;             // R$ por dia, média de 3 meses
@@ -93,6 +94,20 @@ export function calcular(db) {
     FROM empresas e JOIN tickers t ON t.cnpj = e.cnpj AND t.tipo = 'acao' GROUP BY e.cnpj`).all();
   const fundStmt = db.prepare('SELECT * FROM fundamentos WHERE cnpj = ? ORDER BY dt_refer, tipo');
   const capitalFre = new Map(db.prepare('SELECT * FROM capital_fre').all().map(r => [r.cnpj, r]));
+  // Desdobramentos, grupamentos e bonificações da B3 (src/proventos.js), por prefixo do código
+  criarTabelasProventos(db);
+  const eventosPorCodigo = new Map();
+  for (const ev of db.prepare('SELECT * FROM eventos_acoes').all()) {
+    if (!eventosPorCodigo.has(ev.codigo)) eventosPorCodigo.set(ev.codigo, []);
+    eventosPorCodigo.get(ev.codigo).push(ev);
+  }
+  // Proventos por ação declarados na B3, por código e classe (ITSA|PN): base do dividend yield
+  const proventosPorClasse = new Map();
+  for (const p of db.prepare('SELECT codigo, classe, data_com, valor FROM proventos ORDER BY data_com').all()) {
+    const k = `${p.codigo}|${p.classe}`;
+    if (!proventosPorClasse.has(k)) proventosPorClasse.set(k, []);
+    proventosPorClasse.get(k).push(p);
+  }
 
   const historico = [];
   const fotos = [];
@@ -104,6 +119,26 @@ export function calcular(db) {
     if (!on.d.length && !pn.d.length) continue;
     const tickerPrincipal = tks.map(t => [t, volumeMedio(t, hoje)]).sort((a, b) => b[1] - a[1])[0];
     const liquidez = tickerPrincipal[1];
+    // Dividend yield pelos proventos por ação da B3 (soma das datas com em 12 meses ÷ preço), como nas
+    // plataformas de análise. O fluxo de caixa registra a data do pagamento, que pode cair em outro
+    // ano, e no consolidado inclui o que as controladas pagam aos minoritários delas.
+    const tp = tickerPrincipal[0], seriePrincipal = series.get(tp);
+    const evPrincipal = (eventosPorCodigo.get(tp.slice(0, 4)) ?? []).filter(ev => ev.classe === classeTicker(tp) && ev.data_com < hoje);
+    const provs = proventosPorClasse.get(`${tp.slice(0, 4)}|${classeTicker(tp)}`);
+    const somaProventos = (ate, anos) => {
+      const ini = menosAnos(ate, anos);
+      let soma = 0;
+      for (const p of provs) if (p.data_com > ini && p.data_com <= ate) soma += p.valor / fatorAte(evPrincipal, p.data_com);
+      return soma;
+    };
+    const precoAjustado = data => {
+      const p = seriePrincipal ? precoEm(seriePrincipal, data) : null;
+      return p ? p / fatorAte(evPrincipal, data) : null;
+    };
+    const dyProventos = (data, anos = 1) => {
+      const p = provs ? precoAjustado(data) : null;
+      return p ? somaProventos(data, anos) / anos / p : null;
+    };
 
     // Balanços: um por data (DFP prevalece sobre ITR na mesma data)
     const porRef = new Map();
@@ -119,6 +154,8 @@ export function calcular(db) {
     const linhaTempoAcoes = montarLinhaTempoAcoes(regs, precoClasses, on.v.length >= pn.v.length ? on : pn);
     if (!linhaTempoAcoes.length) continue;
     const ajusteFre = ajustarPeloFre(linhaTempoAcoes, regs, capitalFre.get(emp.cnpj), on.v.length >= pn.v.length ? on : pn);
+    const eventosEmp = [...new Set(tks.map(t => t.slice(0, 4)))].flatMap(c => eventosPorCodigo.get(c) ?? []);
+    const ajusteEventos = ajustarPorEventos(linhaTempoAcoes, regs, eventosEmp, ajusteFre ? capitalFre.get(emp.cnpj).dt_receb : null);
     const acoesEm = data => {
       let seg = linhaTempoAcoes[0];
       for (const s of linhaTempoAcoes) if (s.desde <= data) seg = s;
@@ -149,7 +186,7 @@ export function calcular(db) {
         pvp: div(vm, positivo(b.pl_contr)),
         ev_ebit: div(ev, positivo(ebitAj)),
         ev_ebitda: div(ev, positivo(ebitda)),
-        dy: div(b.ttm.dividendos_pagos, vm),
+        dy: dyProventos(data) ?? div(b.ttm.dividendos_pagos, vm),
       };
     };
 
@@ -198,7 +235,7 @@ export function calcular(db) {
     const anuais = regs.filter(r => r.tipo === 'DFP' && r.ttm.lucro_contr != null).slice(-10);
     const anosLucro = anuais.filter(r => r.ttm.lucro_contr > 0).length;
     const anosDividendo = anuais.slice(-5).filter(r => r.ttm.dividendos_pagos > 0).length;
-    const dy3a = div(media(anuais.slice(-3).map(r => r.ttm.dividendos_pagos)), m.vm);
+    const dy3a = dyProventos(hoje, 3) ?? div(media(anuais.slice(-3).map(r => r.ttm.dividendos_pagos)), m.vm);
 
     // Graham: preço justo = raiz(22,5 x LPA x VPA), comparado com o preço da classe principal
     const lpa = div(t.lucro_contr, acoesTotal), vpa = div(b.pl_contr, acoesTotal);
@@ -211,7 +248,7 @@ export function calcular(db) {
     const serieRef = on.v.length >= pn.v.length ? on : pn;
     const ultimoBalanco = regs.filter(r => r.acoes_on != null).at(-1)?.dt_refer;
     // Se o Formulário de Referência já trouxe a nova quantidade de ações, não há o que alertar
-    for (let i = indiceAte(serieRef.d, ultimoBalanco) + 1; !ajusteFre && i > 0 && i < serieRef.d.length; i++) {
+    for (let i = indiceAte(serieRef.d, ultimoBalanco) + 1; !ajusteFre && !ajusteEventos && i > 0 && i < serieRef.d.length; i++) {
       if (pareceEventoSocietario(serieRef.p[i] / serieRef.p[i - 1])) {
         alertas.push(`Preço variou ${Math.round(100 * (serieRef.p[i] / serieRef.p[i - 1] - 1))}% em ${serieRef.d[i]}: possível desdobramento/grupamento, múltiplos podem estar distorcidos até o próximo balanço`);
         break;
@@ -246,15 +283,19 @@ export function calcular(db) {
       }
     }
 
-    const precoSerie = serieRef;
+    // Variação de 12 meses do código principal, ajustada por desdobramento, grupamento e bonificação
+    // (sem o ajuste, o desdobramento de 1:5 da SBSP3 aparecia como queda de 82%)
+    const precoSerie = series.get(tickerPrincipal[0]) ?? serieRef;
     const iHoje = indiceAte(precoSerie.d, hoje), i12 = indiceAte(precoSerie.d, menosAnos(hoje, 1));
+    const variacao12m = i12 >= 0 && iHoje >= 0
+      ? (precoSerie.p[iHoje] / fatorAte(evPrincipal, precoSerie.d[iHoje])) / (precoSerie.p[i12] / fatorAte(evPrincipal, precoSerie.d[i12])) - 1 : null;
 
     fotos.push({
       cnpj: emp.cnpj, nome: emp.nome, ticker: tickerPrincipal[0], tickers: tks.join(' '),
       setor: (emp.setor ?? '').replace(/^Emp\. Adm\. Part\. - /, '').replace('Sem Setor Principal', 'Holdings diversificadas'),
       segmento: emp.segmento, controle: emp.controle, financeira: financeira ? 1 : 0,
       data: hoje, dt_balanco: b.dt_refer, preco: series.get(tickerPrincipal[0])?.p.at(-1) ?? null,
-      variacao_12m: i12 >= 0 ? precoSerie.p[iHoje] / precoSerie.p[i12] - 1 : null,
+      variacao_12m: variacao12m,
       liquidez, vm: m.vm, ev: financeira ? null : m.ev,
       // valuation
       pl: m.pl, pvp: m.pvp, ev_ebit: financeira ? null : m.ev_ebit, ev_ebitda: financeira ? null : m.ev_ebitda,
@@ -274,7 +315,7 @@ export function calcular(db) {
       cagr_receita_5a: financeira ? null : cagr(t.receita, cincoAnos?.ttm.receita),
       cagr_lucro_5a: cagr(t.lucro_contr, cincoAnos?.ttm.lucro_contr),
       anos_lucro: anosLucro, anos_lucro_base: anuais.length, anos_dividendo: anosDividendo,
-      payout: div(t.dividendos_pagos, positivo(t.lucro_contr)),
+      payout: provs && m.dy != null ? div(m.dy * m.vm, positivo(t.lucro_contr)) : div(t.dividendos_pagos, positivo(t.lucro_contr)),
       // números absolutos (12 meses)
       receita_12m: t.receita, lucro_12m: t.lucro_contr, ebitda_12m: m.ebitda, dividendos_12m: t.dividendos_pagos,
       // comparação com o próprio histórico desde 2020
@@ -288,7 +329,7 @@ export function calcular(db) {
       lucro_suspeito: lucroSuspeito ? 1 : 0,
       elegivel: liquidez >= LIQUIDEZ_MINIMA && !desatualizado && t.lucro_contr != null ? 1 : 0,
       alertas: alertas.join(' | '),
-      acoes_fre: ajusteFre?.texto ?? null,
+      acoes_fre: [ajusteFre?.texto, ajusteEventos].filter(Boolean).join(". ") || null,
     });
   }
 
@@ -374,6 +415,32 @@ function montarLinhaTempoAcoes(regs, precoClasses, serieRef) {
     linha.push(seg);
   }
   return linha;
+}
+
+// Desdobramento, grupamento ou bonificação registrado na B3 depois do último balanço (e depois do FRE,
+// se ele já trouxe quantidade nova): multiplica a quantidade de ações da classe a partir do pregão
+// seguinte à data com. Sem isso o valor de mercado fica errado até o próximo balanço (ex.: ORVR, 1:4).
+function ajustarPorEventos(linha, regs, eventos, limite) {
+  const ult = regs.filter(r => r.acoes_on != null).at(-1);
+  if (!ult || !eventos.length) return null;
+  const desde = limite && limite > ult.dt_refer ? limite : ult.dt_refer;
+  // PN, PNA e PNB costumam ter um evento cada: conta uma vez só para o grupo das preferenciais
+  const vistos = new Set();
+  const aplicaveis = eventos.filter(ev => ev.data_com > desde).sort((a, b) => a.data_com.localeCompare(b.data_com)).filter(ev => {
+    const chave = `${ev.classe === 'ON' ? 'ON' : 'PN'}|${ev.data_com}|${ev.tipo}|${ev.fator}`;
+    if (vistos.has(chave)) return false;
+    vistos.add(chave);
+    return true;
+  });
+  if (!aplicaveis.length) return null;
+  for (const ev of aplicaveis) {
+    const ant = linha.at(-1);
+    const m = ev.tipo === 'GRUPAMENTO' ? ev.fator : 1 + ev.fator / 100;
+    const dia = new Date(Date.parse(`${ev.data_com}T12:00:00Z`) + 864e5).toISOString().slice(0, 10);
+    linha.push({ desde: dia, on: ev.classe === 'ON' ? ant.on * m : ant.on, pn: ev.classe === 'ON' ? ant.pn : ant.pn * m });
+  }
+  const nomes = { DESDOBRAMENTO: 'desdobramento', GRUPAMENTO: 'grupamento', BONIFICACAO: 'bonificação' };
+  return `Quantidade de ações ajustada por ${aplicaveis.map(ev => `${nomes[ev.tipo] ?? ev.tipo} com data com em ${ev.data_com.split('-').reverse().join('/')}`).join(' e ')}, registrado na B3 depois do último balanço`;
 }
 
 // Aumento de capital, bonificação ou desdobramento depois do último balanço: a quantidade nova vem

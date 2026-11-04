@@ -33,7 +33,7 @@ export async function atualizarIntraday(db) {
     const lote = tickers.slice(i, i + POR_LOTE);
     try {
       const resp = await fetch(`${URL_LOTE}?symbols=${lote.map(t => `${t}.SA`).join(',')}&range=1d&interval=1d`,
-        { headers: { 'user-agent': 'Mozilla/5.0' } });
+        { headers: { 'user-agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(60000) });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const json = await resp.json();
       for (const r of json.spark?.result ?? []) {
@@ -56,6 +56,8 @@ export async function atualizarIntraday(db) {
   // preço antigo, então só vale cotação do mesmo dia. E só se for posterior ao último fechamento
   // oficial (em feriado o Yahoo devolve o último pregão, que já temos oficial).
   const pregao = cotacoes.find(c => c.ticker === 'BOVA11')?.data;
+  // Sem o BOVA11 (lote dele falhou) não dá para saber o dia: mantém os parciais anteriores
+  if (!pregao) throw new Error('o lote com o BOVA11 falhou; preços parciais anteriores mantidos');
   const novas = pregao > ultimaOficial ? cotacoes.filter(c => c.data === pregao) : [];
   transacao(db, () => {
     db.exec('DELETE FROM cotacoes WHERE parcial = 1');

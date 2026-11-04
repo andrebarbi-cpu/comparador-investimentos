@@ -90,7 +90,9 @@ function montarTopo() {
 // Busca de ativo no topo: ticker ou parte do nome; Enter abre a página da ação (ETF abre a aba de ETFs)
 function montarBusca() {
   const campo = $('#busca'), lista = $('#busca-lista');
-  const todos = [...D.empresas.map(e => ({ tk: e.ticker, nome: e.nome, outros: e.tickers, vm: e.vm ?? 0 })),
+  // Todos os códigos de cada empresa (ALUP11, ALUP3, ALUP4...), o principal primeiro
+  const todos = [...D.empresas.flatMap(e => [e.ticker, ...e.tickers.split(' ').filter(t => t !== e.ticker && D.tickers?.[t])]
+      .map((tk, i) => ({ tk, nome: e.nome, outros: tk, vm: (e.vm ?? 0) / (i ? 10 : 1) }))),
     ...D.etfs.map(x => ({ tk: x.ticker, nome: x.nome, outros: x.ticker, vm: 1e13, etf: true }))];
   let achados = [], sel = 0;
   const abrir = a => { campo.value = ''; lista.hidden = true; campo.blur(); irPara(a.etf ? 'etfs' : `empresa/${a.tk}`); };
@@ -481,6 +483,18 @@ function desenharSpark(svg, e) {
 // A lista de ativos vem de config/carteiras.json (pública). Quantidades e CDBs ficam só no
 // navegador de cada um (localStorage); o link de importação leva os dados no "#", que não vai ao servidor.
 const CHAVE_LOCAL = 'comparador.carteiras.v1';
+// Aceita só números finitos e não negativos e CDBs com os campos conhecidos: o que vem do link ou do
+// armazenamento não pode virar HTML na página nem quebrar as contas
+const numeroValido = v => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+function limparDados(d) {
+  const numeros = o => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {})
+    .filter(([k, v]) => typeof k === 'string' && k.length < 80 && numeroValido(v) != null));
+  const cdbs = (Array.isArray(d?.cdbs) ? d.cdbs : []).filter(c => c && typeof c === 'object').map(c => ({
+    nome: typeof c.nome === 'string' ? c.nome.slice(0, 40) : '',
+    valor: numeroValido(c.valor), data: /^\d{4}-\d{2}-\d{2}$/.test(c.data ?? '') ? c.data : '', pct: numeroValido(c.pct) ?? 100,
+  }));
+  return { qtd: numeros(d?.qtd), cdbs, reserva: numeros(d?.reserva) };
+}
 function lerLocal() {
   try {
     const s = JSON.parse(localStorage.getItem(CHAVE_LOCAL));
@@ -488,7 +502,7 @@ function lerLocal() {
       // Antes eram duas carteiras ("dividendos" e "global"); a reserva era da global
       const reserva = s.reserva ?? {};
       if (reserva.global && !reserva.principal) reserva.principal = reserva.global;
-      return { qtd: s.qtd ?? {}, cdbs: s.cdbs ?? [], reserva, soTenho: !!s.soTenho };
+      return { ...limparDados({ qtd: s.qtd, cdbs: s.cdbs, reserva }), soTenho: !!s.soTenho };
     }
   } catch { /* sem acesso ao armazenamento: segue sem quantidades */ }
   return { qtd: {}, cdbs: [], reserva: {} };
@@ -506,13 +520,17 @@ const deBase64 = s => JSON.parse(new TextDecoder().decode(
 let avisoImportacao = '';
 function importar(codigo) {
   try {
-    const d = deBase64(codigo);
-    Object.assign(local.qtd, d.qtd ?? {});
-    if (Array.isArray(d.cdbs) && d.cdbs.length) local.cdbs = d.cdbs;
-    Object.assign(local.reserva, d.reserva ?? {});
-    salvarLocal();
-    avisoImportacao = localSalvo ? 'Quantidades importadas e salvas neste aparelho.'
+    const d = limparDados(deBase64(codigo));
+    // O link traz a carteira inteira de quem gerou: substitui a deste aparelho, depois de confirmar
+    const temAlgo = Object.keys(local.qtd).length || local.cdbs.length;
+    if (temAlgo && !confirm('Este link substitui as quantidades, os CDBs e a reserva salvos neste aparelho pelos do link. Continuar?')) {
+      avisoImportacao = 'Importação cancelada: nada foi alterado.';
+    } else {
+      local = { ...local, qtd: d.qtd, cdbs: d.cdbs, reserva: d.reserva };
+      salvarLocal();
+      avisoImportacao = localSalvo ? 'Quantidades importadas e salvas neste aparelho.'
       : 'Quantidades importadas, mas este navegador não deixa salvar: elas somem ao fechar a página.';
+    }
   } catch { avisoImportacao = 'O link de importação está incompleto ou corrompido.'; }
   montadas.delete('carteiras');
   history.replaceState(null, '', '#carteiras');
@@ -522,17 +540,19 @@ function importar(codigo) {
 const CARTEIRAS = D.config?.carteiras ?? [];
 const naCarteira = new Set(CARTEIRAS.flatMap(c => (c.acoes ?? []).map(t => porTicker.get(t)?.cnpj)).filter(Boolean));
 const serie = tk => D.precos?.[tk] ?? [];
-const precoAtual = tk => serie(tk).at(-1)?.[1] ?? null;
+// Códigos fora da carteira (e secundários, como ALUP4) usam o resumo D.tickers: [preço, dia, 12 meses, data]
+const precoAtual = tk => serie(tk).at(-1)?.[1] ?? D.tickers?.[tk]?.[0] ?? null;
 function variacao(tk, dias) {
   const s = serie(tk);
-  if (s.length < 2) return null;
-  if (dias === 1) return s.at(-1)[1] / s.at(-2)[1] - 1;
+  if (s.length < 2) return dias === 1 ? D.tickers?.[tk]?.[1] ?? null : dias === 365 ? D.tickers?.[tk]?.[2] ?? null : null;
+  // Papel que não negociou no último pregão não variou nesse dia
+  if (dias === 1) return s.at(-1)[0] !== D.data_precos ? 0 : s.at(-1)[1] / s.at(-2)[1] - 1;
   const alvo = new Date(Date.parse(s.at(-1)[0]) - dias * 86400000).toISOString().slice(0, 10);
   const ant = s.findLast(p => p[0] <= alvo);
   return ant ? s.at(-1)[1] / ant[1] - 1 : null;
 }
 const campoQtd = (chave, passo = 1) => `<input class="campo qtd" type="number" min="0" step="${passo}" inputmode="decimal"
-  data-chave="${esc(chave)}" value="${local.qtd[chave] ?? ''}" placeholder="0" aria-label="Quantidade de ${esc(chave)}">`;
+  data-chave="${esc(chave)}" value="${esc(local.qtd[chave] ?? '')}" placeholder="0" aria-label="Quantidade de ${esc(chave)}">`;
 // Situação de uma ação da carteira: o gatilho pela regra, selos e, embaixo, o que pesa contra a tese
 const situacao = l => {
   const { e, g } = l, s = [`<span class="selo">${g.st}</span>`];
@@ -757,9 +777,9 @@ function blocoCdb() {
     const r = c.valor && c.data ? calcularCdb(c) : null;
     return `<tr style="cursor:default" data-cdb="${i}">
       <td class="esq"><input class="campo" data-campo="nome" value="${esc(c.nome ?? '')}" placeholder="Banco" style="width:120px" aria-label="Banco"></td>
-      <td><input class="campo" data-campo="valor" type="number" min="0" step="0.01" value="${c.valor ?? ''}" placeholder="R$" style="width:110px" aria-label="Valor aplicado"></td>
+      <td><input class="campo" data-campo="valor" type="number" min="0" step="0.01" value="${esc(c.valor ?? '')}" placeholder="R$" style="width:110px" aria-label="Valor aplicado"></td>
       <td><input class="campo" data-campo="data" type="date" value="${esc(c.data ?? '')}" aria-label="Data da aplicação"></td>
-      <td><input class="campo" data-campo="pct" type="number" min="0" step="1" value="${c.pct ?? 100}" style="width:80px" aria-label="Percentual do CDI"></td>
+      <td><input class="campo" data-campo="pct" type="number" min="0" step="1" value="${esc(c.pct ?? 100)}" style="width:80px" aria-label="Percentual do CDI"></td>
       <td>${r ? dinheiro(r.bruto) : '–'}</td><td>${r ? pctSinal(r.rend) : '–'}</td>
       <td>${r ? pct(r.aliquota, 1) : '–'}</td><td>${r ? dinheiro(r.liquido) : '–'}</td>
       <td><button class="botao" data-remover="${i}" aria-label="Remover CDB">×</button></td></tr>`;
@@ -905,7 +925,7 @@ function pesosClasses(c) {
 function gatilhosFaixas(c) {
   const { reserva, valores, investido } = pesosClasses(c);
   const campo = `<label class="tile-sub" style="display:flex;gap:8px;align-items:center;margin:8px 0">Reserva de emergência (fica fora das faixas):
-    <input class="campo" type="number" min="0" step="100" data-reserva="${esc(c.id)}" value="${reserva || ''}" placeholder="ex.: 10000" style="width:120px"></label>`;
+    <input class="campo" type="number" min="0" step="100" data-reserva="${esc(c.id)}" value="${esc(reserva || '')}" placeholder="ex.: 10000" style="width:120px"></label>`;
   if (!investido) return campo;
   const nomes = { tesouro: 'Tesouro longo', global: 'Global (IVVB11)', acoes: 'Ações Brasil', municao: 'Munição (CDB além da reserva)' };
   const notaMunicao = c.faixas.municao?.[0] === 0 ? '<p class="tile-sub" style="margin:6px 0 0">A munição pode ficar perto de zero depois de uma compra: os aportes mensais repõem o caixa para a próxima queda.</p>' : '';
@@ -1040,7 +1060,7 @@ const COLUNAS = [
   { k: 'pl', r: 'P/L', f: v => num(v), maior: 0 },
   { k: 'pvp', r: 'P/VP', f: v => num(v, 2), maior: 0 },
   { k: 'ev_ebitda', r: 'EV/EBITDA', f: v => num(v), maior: 0, nf: true },
-  { k: 'dy', r: 'Div. 12m', f: v => pct(v), maior: 1, dica: 'Dividendos e JCP pagos nos últimos 12 meses sobre o valor de mercado' },
+  { k: 'dy', r: 'Div. 12m', f: v => pct(v), maior: 1, dica: 'Dividendos e JCP por ação com data com nos últimos 12 meses, sobre o preço (dados da B3)' },
   { k: 'roe', r: 'ROE', f: v => pct(v), maior: 1 },
   { k: 'roic', r: 'ROIC', f: v => pct(v), maior: 1, nf: true },
   { k: 'margem_liq', r: 'Marg. líq.', f: v => pct(v), maior: 1, nf: true },
@@ -1136,8 +1156,11 @@ const SECOES_ATIVO = [['resumo', 'Resumo'], ['cotacao', 'Cotação'], ['indicado
 let voltarPara = 'inicio';
 let observadorSecoes = null;
 const cacheAtivos = new Map();
+let aberturaAtivo = 0;
 function carregarAtivo(tk) {
-  if (!cacheAtivos.has(tk)) cacheAtivos.set(tk, fetch(`ativos/${encodeURIComponent(tk)}.json`).then(r => (r.ok ? r.json() : null)).catch(() => null));
+  // Falha não fica guardada: a próxima abertura tenta de novo
+  if (!cacheAtivos.has(tk)) cacheAtivos.set(tk, fetch(`ativos/${encodeURIComponent(tk)}.json`).then(r => (r.ok ? r.json() : null)).catch(() => null)
+    .then(d => { if (!d) cacheAtivos.delete(tk); return d; }));
   return cacheAtivos.get(tk);
 }
 
@@ -1147,7 +1170,7 @@ const EXPLICA = {
   'P/VP': 'Preço ÷ patrimônio por ação. Abaixo de 1, a bolsa paga menos que o valor contábil da empresa.',
   'EV/EBIT': 'Valor da firma (valor de mercado + dívida líquida) ÷ lucro operacional. Considera a dívida, por isso compara melhor empresas endividadas.',
   'EV/EBITDA': 'Valor da firma ÷ geração de caixa operacional (EBITDA). Muito usado para comparar empresas do mesmo setor.',
-  'Dividendos 12m': 'Dividendos e JCP pagos nos últimos 12 meses ÷ preço de hoje (dividend yield).',
+  'Dividendos 12m': 'Dividendos e JCP por ação com data com nos últimos 12 meses ÷ preço de hoje (dividend yield), pelos proventos declarados na B3.',
   'Valor de mercado': 'Preço × total de ações: quanto a bolsa diz que a empresa vale.',
   'Valor da firma (EV)': 'Valor de mercado + dívida líquida: o custo de "comprar a empresa inteira" com as dívidas.',
   'ROE': 'Lucro ÷ patrimônio líquido. Quanto a empresa lucra sobre o dinheiro dos acionistas; acima de 15% costuma ser bom.',
@@ -1176,14 +1199,16 @@ function montarAtivo(el, ticker) {
   const fin = !!e.financeira;
   const outros = e.tickers.split(' ').filter(t => t !== ticker);
   const p = precoAtual(ticker) ?? e.preco;
+  // Margens de Graham e Bazin são relativas ao preço: valem para qualquer classe na escala do código aberto
+  const v12 = variacao(ticker, 365) ?? e.variacao_12m;
   const linha = (rotulo, valor, dica) => {
     const txt = EXPLICA[rotulo] ?? dica;
     return `<dt${txt ? ` class="com-explica" data-explica="${esc(txt)}" tabindex="0" role="button"` : ''}>${rotulo}</dt><dd>${valor}</dd>`;
   };
   const sinal = v => `<span class="${classeSinal(v)}">${pctSinal(v)}</span>`;
   const g = naCarteira.has(e.cnpj) ? gatilhoAcao(ticker, e, p) : null;
-  const tetoBazin = ok(e.bazin_margem) ? e.preco * (1 + e.bazin_margem) : null;
-  const justoGraham = ok(e.graham_margem) ? e.preco * (1 + e.graham_margem) : null;
+  const tetoBazin = ok(e.bazin_margem) ? p * (1 + e.bazin_margem) : null;
+  const justoGraham = ok(e.graham_margem) ? p * (1 + e.graham_margem) : null;
   const pares = D.empresas.filter(x => x.setor === e.setor && x.vm > 0).sort((a, b) => b.vm - a.vm);
   const vizinhos = [...new Set([...pares.slice(0, 8), e])];
   const mediana = k => { const v = pares.map(x => x[k]).filter(ok).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; };
@@ -1200,7 +1225,7 @@ function montarAtivo(el, ticker) {
           <div class="nome">${esc(e.nome)}</div>
           <div class="setor">${esc(e.setor)}${outros.length ? ` · outros códigos: ${outros.map(t => `<a href="#empresa/${esc(t)}">${esc(t)}</a>`).join(', ')}` : ''}</div></div>
       </div>
-      <div class="ativo-preco"><b>R$ ${num(p, 2)}</b><span>${sinal(ticker === e.ticker ? e.var_dia : variacao(ticker, 1))} no dia · ${sinal(e.variacao_12m)} em 12 meses</span></div>
+      <div class="ativo-preco"><b>R$ ${num(p, 2)}</b><span>${sinal(variacao(ticker, 1) ?? e.var_dia)} no dia · ${sinal(v12)} em 12 meses</span></div>
     </div>
     <div class="ativo-numeros">${numeros([['Valor de mercado', dinheiro(e.vm)], ['P/L', num(e.pl)], ['P/VP', num(e.pvp, 2)], ['Dividendos 12m', pct(e.dy)],
       ['ROE', pct(e.roe)], ['Nota geral', ok(e.nota_geral) ? `${e.nota_geral}<small>/100</small>` : '–'], ['Liquidez/dia', dinheiro(e.liquidez)]])}</div>
@@ -1291,7 +1316,7 @@ function montarAtivo(el, ticker) {
       <div class="graficos"><div class="grafico-bloco"><h3>Lucro líquido por ano</h3><div class="tile-sub">Atribuído aos controladores</div><div class="grafico" id="g-lucro"></div></div>
         <div class="grafico-bloco"><h3>Lucro por trimestre</h3><div class="tile-sub">Cada trimestre isolado, últimos 8${proximoResultado(e) ? ' · ' + proximoResultado(e).replace(/<[^>]+>/g, '') : ''}</div><div class="grafico" id="g-tri"></div></div>
         <div class="grafico-bloco"><h3>${fin ? 'Receitas de intermediação' : 'Receita líquida'} por ano</h3><div class="tile-sub">&nbsp;</div><div class="grafico" id="g-receita"></div></div>
-        <div class="grafico-bloco"><h3>Dividendos e JCP pagos por ano</h3><div class="tile-sub">Total pago pela empresa, pela demonstração de fluxo de caixa</div><div class="grafico" id="g-div"></div></div></div>
+        <div class="grafico-bloco"><h3>Dividendos e JCP pagos por ano</h3><div class="tile-sub">Total pago aos acionistas da empresa, pelo fluxo de caixa da controladora</div><div class="grafico" id="g-div"></div></div></div>
       ${anos.length ? `<div class="tabela-caixa" style="max-height:none"><table class="tabela-contabil"><thead><tr><th class="esq">Em reais</th>${[...anos].reverse().map(a => `<th>${a[0]}</th>`).join('')}</tr></thead><tbody>
         <tr class="grupo"><td class="esq" colspan="${anos.length + 1}">Resultado</td></tr>
         ${linhaTabela(fin ? 'Receitas de intermediação' : 'Receita líquida', a => dinheiro(a[1]))}
@@ -1375,8 +1400,10 @@ function montarAtivo(el, ticker) {
   graficoColunas($('#g-div'), { pontos: anos.map(a => [String(a[0]), a[3] == null ? null : Math.abs(a[3])]), fmt: dinheiro });
   graficoColunas($('#g-tri'), { pontos: (D.trimestres?.[e.cnpj] ?? []).slice(-8).map(t => [rotuloTrimestre(t[0]), t[1]]), fmt: dinheiro });
 
+  // Cada abertura ganha um número: resposta que chega depois de outra abertura é descartada
+  const minhaVez = ++aberturaAtivo;
   carregarAtivo(ticker).then(dados => {
-    if (abaAtual !== 'ativo' || $('#ativo-titulo')?.textContent !== ticker) return;
+    if (minhaVez !== aberturaAtivo || abaAtual !== 'ativo') return;
     if (!dados) {
       for (const id of ['#a-preco-sub', '#a-proventos', '#sim-resultado']) $(id).innerHTML = '<span class="vazio">Histórico diário indisponível (abra pelo site publicado ou pelo servidor local).</span>';
       return;
@@ -1421,9 +1448,9 @@ function desenharProventos(dados, e) {
   graficoColunas($('#g-prov-ano'), { pontos: anos.map(([a, s]) => [a, s.valor]), fmt: v => `R$ ${num(v, 2)}` });
   graficoColunas($('#g-dy-ano'), { pontos: anos.map(([a, s]) => [a, s.dy]), fmt: v => pct(v), fmtEixo: v => pct(v, 0) });
   // Meses de pagamento nos últimos 5 anos
-  const ano0 = String(Number(hojeIso().slice(0, 4)) - 5);
+  const ano0 = `${Number(hojeIso().slice(0, 4)) - 4}-01-01`;
   const meses = Array(12).fill(0), vistos = new Set();
-  for (const x of prov) if (x[0] > ano0 && !vistos.has(x[0].slice(0, 7))) { vistos.add(x[0].slice(0, 7)); meses[Number(x[0].slice(5, 7)) - 1]++; }
+  for (const x of prov) if (x[0] >= ano0 && !vistos.has(x[0].slice(0, 7))) { vistos.add(x[0].slice(0, 7)); meses[Number(x[0].slice(5, 7)) - 1]++; }
   const mx = Math.max(1, ...meses);
   $('#a-meses').innerHTML = `<div class="meses-grade">${['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'].map((m, i) =>
     `<div class="mes ${meses[i] ? 'com' : ''}" style="--f:${meses[i] / mx}" title="${meses[i]} ${meses[i] === 1 ? 'ano' : 'anos'} com data com em ${m}"><b>${m}</b><span>${meses[i] ? `${meses[i]}×` : '–'}</span></div>`).join('')}</div>`;
@@ -1452,22 +1479,33 @@ function simular(dados) {
   const precos = dados.precos, ult = precos.at(-1)[0];
   const desde = new Date(Date.parse(ult) - anos * 365.25 * 864e5).toISOString().slice(0, 10);
   const pts = precos.filter(x => x[0] >= desde);
-  if (pts.length < 20 || (!inicial && !mensal)) { $('#sim-resultado').innerHTML = '<p class="vazio">Histórico curto demais para esse período.</p>'; return; }
+  if (!inicial && !mensal) { $('#sim-resultado').innerHTML = '<p class="vazio">Informe um aporte inicial ou mensal.</p>'; return; }
+  if (pts.length < 20) { $('#sim-resultado').innerHTML = '<p class="vazio">Histórico curto demais para esse período.</p>'; return; }
   if (pts[0][0] > new Date(Date.parse(desde) + 40 * 864e5).toISOString().slice(0, 10)) {
     $('#sim-resultado').innerHTML = `<p class="vazio">A ação só tem cotação desde ${data(pts[0][0])}.</p>`; return;
   }
-  const prov = new Map();
-  for (const x of dados.proventos) if (x[0] >= pts[0][0]) prov.set(x[0], (prov.get(x[0]) ?? 0) + x[4]);
+  // Percorre todos os dias úteis (os do CDI e os de pregão): o CDI rende mesmo quando a ação não negocia,
+  // e o provento com data com num dia sem negócio entra no primeiro pregão seguinte
+  const precoDe = new Map(pts);
   const cdi = new Map((D.cdi_diario ?? []).map(x => [x[0], x[1]]));
+  const dias = [...new Set([...pts.map(x => x[0]), ...[...cdi.keys()].filter(d => d >= pts[0][0] && d <= pts.at(-1)[0])])].sort();
+  const provs = dados.proventos.filter(x => x[0] >= pts[0][0]).map(x => [x[0], x[4]]).sort((a, b) => a[0].localeCompare(b[0]));
   let acoes = inicial / pts[0][1], investido = inicial, recebido = 0, caixa = 0, saldoCdi = inicial, mes = pts[0][0].slice(0, 7);
+  let pendente = 0, ip = 0, ultimoPreco = pts[0][1];
   const serie = new Map();
-  for (const [d, preco] of pts) {
-    if (d !== pts[0][0]) saldoCdi *= 1 + (cdi.get(d) ?? 0) / 100;
-    if (d.slice(0, 7) !== mes) { mes = d.slice(0, 7); acoes += mensal / preco; investido += mensal; saldoCdi += mensal; }
-    const pr = prov.get(d);
-    if (pr) { const v = acoes * pr; recebido += v; if (reinveste) acoes += v / preco; else caixa += v; }
-    serie.set(d.slice(0, 7), [acoes * preco + caixa, saldoCdi, investido]);
+  for (const d of dias) {
+    if (d !== dias[0]) saldoCdi *= 1 + (cdi.get(d) ?? 0) / 100;
+    // Direito ao provento: ações que a pessoa tinha na data com
+    while (ip < provs.length && provs[ip][0] <= d) { pendente += acoes * provs[ip][1]; ip++; }
+    const preco = precoDe.get(d);
+    if (preco != null) {
+      ultimoPreco = preco;
+      if (d.slice(0, 7) !== mes) { mes = d.slice(0, 7); acoes += mensal / preco; investido += mensal; saldoCdi += mensal; }
+      if (pendente) { recebido += pendente; if (reinveste) acoes += pendente / preco; else caixa += pendente; pendente = 0; }
+    }
+    serie.set(d.slice(0, 7), [acoes * ultimoPreco + caixa + pendente, saldoCdi, investido]);
   }
+  recebido += pendente; caixa += pendente;
   const final = acoes * pts.at(-1)[1] + caixa;
   const ganho = final / investido - 1, ganhoCdi = saldoCdi / investido - 1;
   const meses = [...serie.keys()];
@@ -1806,7 +1844,7 @@ function montarMetodo(el) {
         <li><b>Sem olhar o futuro:</b> em cada data do histórico só vale o balanço que já tinha sido entregue à CVM.</li>
         <li><b>Valor de mercado</b> soma as ações ON e PN, cada uma pelo seu preço.</li>
         <li><b>EBITDA</b> não inclui o lucro de coligadas (equivalência patrimonial).</li>
-        <li><b>Dividendos</b> são os efetivamente pagos (dividendos + JCP), pelo fluxo de caixa.</li>
+        <li><b>Dividendos</b> são os proventos por ação (dividendos + JCP) com data com nos últimos 12 meses, declarados na B3, sobre o preço. Empresa sem registro na B3 usa o fluxo de caixa da controladora.</li>
       </ul>
       <h3>Notas de 0 a 100</h3>
       <p>Cada nota é a posição da empresa entre as demais do mesmo grupo (empresas, ou bancos e seguradoras). Só entram
