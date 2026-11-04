@@ -13,7 +13,11 @@
         "CXSE3",
         "TIMS3",
         "VALE3",
-        "SAPR4"
+        "SAPR4",
+        "ALUP4",
+        "MDIA3",
+        "POMO4",
+        "VIVT3"
       ],
       "etfs": [
         "IVVB11"
@@ -169,6 +173,30 @@
         "ticker": "VALE3",
         "data": "2026-10-29",
         "quando": "",
+        "confirmado": true
+      },
+      {
+        "ticker": "POMO4",
+        "data": "2026-11-03",
+        "quando": "após o fechamento",
+        "confirmado": true
+      },
+      {
+        "ticker": "ALUP4",
+        "data": "2026-11-05",
+        "quando": "após o fechamento",
+        "confirmado": true
+      },
+      {
+        "ticker": "VIVT3",
+        "data": "2026-11-10",
+        "quando": "após o fechamento",
+        "confirmado": false
+      },
+      {
+        "ticker": "MDIA3",
+        "data": "2026-11-12",
+        "quando": "após o fechamento",
         "confirmado": true
       }
     ]
