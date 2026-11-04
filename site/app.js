@@ -526,6 +526,7 @@ function gatilhosFaixas(c) {
     <input class="campo" type="number" min="0" step="100" data-reserva="${esc(c.id)}" value="${reserva || ''}" placeholder="ex.: 10000" style="width:120px"></label>`;
   if (!investido) return campo;
   const nomes = { tesouro: 'Tesouro longo', global: 'Global (IVVB11)', acoes: 'Ações Brasil', municao: 'Munição (CDB além da reserva)' };
+  const notaMunicao = c.faixas.municao?.[0] === 0 ? '<p class="tile-sub" style="margin:6px 0 0">A munição pode ficar perto de zero depois de uma compra: os aportes mensais repõem o caixa para a próxima queda.</p>' : '';
   const linhas = Object.entries(nomes).map(([k, nome]) => {
     const [lo, hi] = c.faixas[k] ?? [];
     const f = valores[k] / investido;
@@ -542,7 +543,7 @@ function gatilhosFaixas(c) {
   return `<h3 style="margin-top:12px">Peso de cada classe</h3>${campo}
     ${reserva ? '' : '<p class="tile-sub" style="margin:0 0 6px">Sem a reserva informada, todo o CDB conta como munição.</p>'}
     <div style="overflow-x:auto"><table><thead><tr><th class="esq">Classe</th><th>Valor</th><th>Peso</th><th>Faixa</th><th class="esq">Situação</th></tr></thead>
-    <tbody>${linhas}</tbody></table></div>`;
+    <tbody>${linhas}</tbody></table></div>${notaMunicao}`;
 }
 
 // Quanto o título ganha (além do IPCA) se a taxa cair até o gatilho

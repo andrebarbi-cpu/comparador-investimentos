@@ -34,7 +34,7 @@
       ],
       "cdb": true,
       "faixas": {
-        "_leia": "Faixa de peso de cada classe na parte investida (fora a reserva). Abaixo da faixa: direcionar aportes e dividendos; acima: realizar parte.",
+        "_leia": "Faixa de peso de cada classe na parte investida (fora a reserva). Abaixo da faixa: direcionar aportes e dividendos; acima: realizar parte. A munição pode ir a zero porque os aportes mensais repõem o caixa.",
         "tesouro": [
           0.3,
           0.35
@@ -48,7 +48,7 @@
           0.3
         ],
         "municao": [
-          0.1,
+          0,
           0.2
         ]
       }
