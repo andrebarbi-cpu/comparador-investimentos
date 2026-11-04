@@ -1,6 +1,7 @@
 // Etapa 3: exporta o que a página precisa para site/dados.js (window.DADOS = {...}).
 // Um .js em vez de .json para a página abrir direto do disco, sem servidor.
-import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { criarTabelasProventos, classeTicker, fatorAte } from './proventos.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { abrirDb } from './db.js';
@@ -20,13 +21,17 @@ export function exportar(db) {
     (historico[r.cnpj] ??= []).push([r.data.slice(0, 7), arred(r.pl), arred(r.pvp), arred(r.ev_ebitda), arred(r.dy)]);
   }
 
-  // Exercícios anuais: [ano, receita, lucro, dividendos pagos, dívida líquida, patrimônio]
+  // Exercícios anuais: [ano, receita, lucro, dividendos pagos, dívida líquida, patrimônio,
+  //   EBIT, ativo total, caixa, dívida bruta, caixa das operações, capex, caixa de financiamento]
+  //   (no banco, "fcf" é o caixa das atividades de financiamento, não o caixa livre)
   const anuais = {};
   for (const r of db.prepare(`SELECT cnpj, dt_refer, receita, lucro_contr, dividendos_pagos,
-      coalesce(divida_cp,0) + coalesce(divida_lp,0) - coalesce(caixa,0) divida_liq, pl_contr
+      coalesce(divida_cp,0) + coalesce(divida_lp,0) - coalesce(caixa,0) divida_liq, pl_contr,
+      ebit, ativo_total, caixa, coalesce(divida_cp,0) + coalesce(divida_lp,0) divida_bruta, fco, capex, fcf
       FROM fundamentos WHERE tipo = 'DFP' AND cnpj IN (SELECT cnpj FROM indicadores) ORDER BY cnpj, dt_refer`).iterate()) {
     (anuais[r.cnpj] ??= []).push([Number(r.dt_refer.slice(0, 4)), arred(r.receita), arred(r.lucro_contr),
-      arred(r.dividendos_pagos), arred(r.divida_liq), arred(r.pl_contr)]);
+      arred(r.dividendos_pagos), arred(r.divida_liq), arred(r.pl_contr), arred(r.ebit), arred(r.ativo_total),
+      arred(r.caixa), arred(r.divida_bruta), arred(r.fco), arred(r.capex), arred(r.fcf)]);
   }
 
   // ETFs e CDI: fechamento do último pregão de cada mês
@@ -113,6 +118,42 @@ export function exportar(db) {
   const texto = `window.DADOS = ${JSON.stringify(dados)};\n`;
   writeFileSync(join(RAIZ, 'site', 'dados.js'), texto);
   log(`Exportado site/dados.js (${(texto.length / 1024).toFixed(0)} KB)`);
+  exportarAtivos(db, empresas);
+}
+
+// Um arquivo por código de negociação (site/ativos/ITSA4.json), lido pela página do ativo só quando
+// ela abre: cotação diária desde 2016 e proventos, ajustados por desdobramento, grupamento e bonificação.
+//   precos: [data, fechamento ajustado]
+//   proventos: [data com, pagamento, tipo, valor como declarado, valor ajustado, preço na data com]
+//   eventos: [data com, tipo, fator]
+function exportarAtivos(db, empresas) {
+  criarTabelasProventos(db);
+  const pasta = join(RAIZ, 'site', 'ativos');
+  rmSync(pasta, { recursive: true, force: true });
+  mkdirSync(pasta, { recursive: true });
+  const cot = db.prepare("SELECT data, fechamento FROM cotacoes WHERE ticker = ? AND data >= '2016-01-01' ORDER BY data");
+  const prov = db.prepare('SELECT data_com, pagamento, tipo, valor, preco_com FROM proventos WHERE codigo = ? AND classe = ? ORDER BY data_com DESC');
+  const evs = db.prepare('SELECT data_com, tipo, fator FROM eventos_acoes WHERE codigo = ? AND classe = ? ORDER BY data_com');
+  const TIPO = { DIVIDENDO: 'Dividendo', 'JRS CAP PROPRIO': 'JCP', RENDIMENTO: 'Rendimento' };
+  let n = 0, bytes = 0;
+  for (const e of empresas) for (const tk of e.tickers.split(' ')) {
+    const precos = cot.all(tk);
+    if (precos.length < 2) continue;
+    const codigo = tk.slice(0, 4), classe = classeTicker(tk);
+    const eventos = classe ? evs.all(codigo, classe) : [];
+    const proventos = classe ? prov.all(codigo, classe) : [];
+    const ajusta = d => fatorAte(eventos, d);
+    const dados = {
+      t: tk,
+      precos: precos.map(p => [p.data, arred(p.fechamento / ajusta(p.data))]),
+      proventos: proventos.map(p => [p.data_com, p.pagamento, TIPO[p.tipo] ?? p.tipo, arred(p.valor), arred(p.valor / ajusta(p.data_com)), p.preco_com]),
+      eventos: eventos.map(ev => [ev.data_com, ev.tipo, ev.fator]),
+    };
+    const txt = JSON.stringify(dados);
+    writeFileSync(join(pasta, `${tk}.json`), txt);
+    n++; bytes += txt.length;
+  }
+  log(`Exportados ${n} arquivos de ativos (${(bytes / 1048576).toFixed(1)} MB)`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

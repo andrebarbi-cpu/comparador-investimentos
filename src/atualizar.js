@@ -10,6 +10,7 @@ import { calcular } from './calcular.js';
 import { exportar } from './exportar.js';
 import { atualizarIntraday } from './intraday.js';
 import { atualizarEtfsExternos } from './externos.js';
+import { atualizarProventos } from './proventos.js';
 import { log, anoAtual } from './util.js';
 
 const ANO_INICIO = 2016;
@@ -50,6 +51,8 @@ if (intraday) {
   await etapa('ETFs fora do arquivo da B3', () => atualizarEtfsExternos(db));
   // Aumentos de capital, bonificações e desdobramentos que ainda não chegaram ao balanço
   await etapa('Formulário de Referência', () => atualizarCapitalFre(db, ano));
+  // Dividendos, JCP e desdobramentos por ação (B3); uma vez por dia
+  await etapa('proventos', () => atualizarProventos(db));
   await etapa('Banco Central', () => atualizarBcb(db, ANO_INICIO));
   await etapa('Tesouro', () => atualizarTesouro(db, ANO_INICIO));
 }

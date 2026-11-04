@@ -11,3 +11,4 @@ site/dados.js
 .claude/
 # análises pessoais (valores da carteira): nunca vão para o repositório público
 analises/
+site/ativos/

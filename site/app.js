@@ -1128,17 +1128,58 @@ function desenharRanking() {
 }
 
 // ---------- Ficha da empresa ----------
-// Página própria de cada ação, como nas plataformas de análise: cabeçalho com preço e números-chave,
-// atalhos para as seções (resumo, indicadores, dividendos, resultados e setor) e tudo numa página só.
-const SECOES_ATIVO = [['resumo', 'Resumo'], ['indicadores', 'Indicadores'], ['dividendos', 'Dividendos'], ['resultados', 'Resultados'], ['setor', 'Setor']];
+// Página própria de cada ação, no formato das plataformas de análise: cabeçalho com preço e números-chave,
+// menu de seções e, numa página só, cotação, indicadores (com explicação), dividendos, dados contábeis,
+// comparação com o setor e simulador. Cotação diária e proventos vêm de ativos/TICKER.json, lido na hora.
+const SECOES_ATIVO = [['resumo', 'Resumo'], ['cotacao', 'Cotação'], ['indicadores', 'Indicadores'], ['dividendos', 'Dividendos'],
+  ['contabil', 'Contábil'], ['setor', 'Setor'], ['simulador', 'Simulador']];
 let voltarPara = 'inicio';
+let observadorSecoes = null;
+const cacheAtivos = new Map();
+function carregarAtivo(tk) {
+  if (!cacheAtivos.has(tk)) cacheAtivos.set(tk, fetch(`ativos/${encodeURIComponent(tk)}.json`).then(r => (r.ok ? r.json() : null)).catch(() => null));
+  return cacheAtivos.get(tk);
+}
+
+// O que cada indicador mede, em linguagem simples (aparece ao clicar no nome)
+const EXPLICA = {
+  'P/L': 'Preço ÷ lucro por ação. Quantos anos de lucro atual pagariam o preço da ação. Menor = mais barato, mas compare com o histórico e o setor.',
+  'P/VP': 'Preço ÷ patrimônio por ação. Abaixo de 1, a bolsa paga menos que o valor contábil da empresa.',
+  'EV/EBIT': 'Valor da firma (valor de mercado + dívida líquida) ÷ lucro operacional. Considera a dívida, por isso compara melhor empresas endividadas.',
+  'EV/EBITDA': 'Valor da firma ÷ geração de caixa operacional (EBITDA). Muito usado para comparar empresas do mesmo setor.',
+  'Dividendos 12m': 'Dividendos e JCP pagos nos últimos 12 meses ÷ preço de hoje (dividend yield).',
+  'Valor de mercado': 'Preço × total de ações: quanto a bolsa diz que a empresa vale.',
+  'Valor da firma (EV)': 'Valor de mercado + dívida líquida: o custo de "comprar a empresa inteira" com as dívidas.',
+  'ROE': 'Lucro ÷ patrimônio líquido. Quanto a empresa lucra sobre o dinheiro dos acionistas; acima de 15% costuma ser bom.',
+  'ROIC': 'Lucro operacional ÷ capital investido (próprio e de terceiros). Mede a qualidade do negócio sem o efeito da dívida.',
+  'Margem bruta': 'Quanto sobra da receita depois do custo direto dos produtos ou serviços.',
+  'Margem EBIT': 'Lucro operacional ÷ receita. Mostra a eficiência da operação antes de juros e impostos.',
+  'Margem líquida': 'Lucro final ÷ receita: quanto de cada R$ 100 vendidos vira lucro.',
+  'Dívida líquida': 'Dívida bruta menos o caixa. Negativa quando a empresa tem mais caixa que dívida.',
+  'Dív. líq. / EBITDA': 'Em quantos anos a geração de caixa pagaria a dívida líquida. Acima de 3 pede atenção.',
+  'Dív. líq. / PL': 'Dívida líquida ÷ patrimônio: quanto a empresa usa de dinheiro de terceiros contra o dos sócios.',
+  'Liquidez corrente': 'Ativo circulante ÷ passivo circulante. Acima de 1, o que entra no curto prazo cobre o que vence no curto prazo.',
+  'Receita, 5 anos': 'Crescimento médio anual da receita nos últimos 5 anos (CAGR).',
+  'Lucro, 5 anos': 'Crescimento médio anual do lucro nos últimos 5 anos (CAGR).',
+  'Anos com lucro': 'Em quantos exercícios a empresa teve lucro. Constância importa mais que um ano excepcional.',
+  'Anos com dividendo': 'Em quantos dos últimos anos a empresa pagou proventos.',
+  'Graham': 'Preço justo de Benjamin Graham: √(22,5 × lucro por ação × patrimônio por ação). Serve para empresas lucrativas e estáveis.',
+  'Bazin (preço-teto)': 'Método de Décio Bazin: o preço máximo para receber 6% ao ano, pelo dividendo médio de 3 anos.',
+  'Lucro / preço': 'Inverso do P/L (earnings yield): quanto a empresa lucra por real investido na ação.',
+  'Contra Tesouro IPCA+': 'Lucro/preço menos a taxa real do Tesouro IPCA+. Positivo = a ação "rende" mais que o título sem risco, em lucro.',
+  'Payout 12m': 'Parte do lucro paga como proventos. Acima de 100%, pagou mais do que lucrou.',
+};
+
 function montarAtivo(el, ticker) {
   const e = porTicker.get(ticker);
   if (!e) { el.innerHTML = `<p class="vazio">Ativo ${esc(ticker)} não encontrado.</p>`; return; }
   const fin = !!e.financeira;
-  const outros = e.tickers.split(' ').filter(t => t !== e.ticker);
-  const p = precoAtual(ticker) ?? (ticker === e.ticker ? e.preco : null) ?? e.preco;
-  const linha = (rotulo, valor, dica) => `<dt${dica ? ` title="${esc(dica)}"` : ''}>${rotulo}</dt><dd>${valor}</dd>`;
+  const outros = e.tickers.split(' ').filter(t => t !== ticker);
+  const p = precoAtual(ticker) ?? e.preco;
+  const linha = (rotulo, valor, dica) => {
+    const txt = EXPLICA[rotulo] ?? dica;
+    return `<dt${txt ? ` class="com-explica" data-explica="${esc(txt)}" tabindex="0" role="button"` : ''}>${rotulo}</dt><dd>${valor}</dd>`;
+  };
   const sinal = v => `<span class="${classeSinal(v)}">${pctSinal(v)}</span>`;
   const g = naCarteira.has(e.cnpj) ? gatilhoAcao(ticker, e, p) : null;
   const tetoBazin = ok(e.bazin_margem) ? e.preco * (1 + e.bazin_margem) : null;
@@ -1148,6 +1189,8 @@ function montarAtivo(el, ticker) {
   const mediana = k => { const v = pares.map(x => x[k]).filter(ok).sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : null; };
   const anos = (D.anuais[e.cnpj] ?? []).filter(a => a[0] >= 2015);
   const hist = D.historico[e.cnpj] ?? [];
+  const numeros = itens => itens.map(([r, v]) => `<div><span>${r}</span><b>${v}</b></div>`).join('');
+  const linhaTabela = (rotulo, f, dica) => `<tr style="cursor:default"><td class="esq"${dica ? ` title="${esc(dica)}"` : ''}>${rotulo}</td>${[...anos].reverse().map(a => `<td>${f(a)}</td>`).join('')}</tr>`;
 
   el.innerHTML = `
     <div class="ativo-cabecalho">
@@ -1155,15 +1198,12 @@ function montarAtivo(el, ticker) {
         <button class="botao botao-voltar" id="a-voltar" aria-label="Voltar">←</button>
         <div><div class="ativo-linha1"><h2 id="ativo-titulo">${esc(ticker)}</h2>${selos(e)}</div>
           <div class="nome">${esc(e.nome)}</div>
-          <div class="setor">${esc(e.setor)}${e.segmento ? ' · ' + esc(e.segmento) : ''}${outros.length ? ` · outros códigos: ${outros.map(esc).join(', ')}` : ''}</div></div>
+          <div class="setor">${esc(e.setor)}${outros.length ? ` · outros códigos: ${outros.map(t => `<a href="#empresa/${esc(t)}">${esc(t)}</a>`).join(', ')}` : ''}</div></div>
       </div>
-      <div class="ativo-preco"><b>R$ ${num(p, 2)}</b><span>${sinal(e.var_dia)} no dia · ${sinal(e.variacao_12m)} em 12 meses</span></div>
+      <div class="ativo-preco"><b>R$ ${num(p, 2)}</b><span>${sinal(ticker === e.ticker ? e.var_dia : variacao(ticker, 1))} no dia · ${sinal(e.variacao_12m)} em 12 meses</span></div>
     </div>
-    <div class="ativo-numeros">
-      ${[['Valor de mercado', dinheiro(e.vm)], ['P/L', num(e.pl)], ['P/VP', num(e.pvp, 2)], ['Dividendos 12m', pct(e.dy)],
-        ['ROE', pct(e.roe)], ['Nota geral', ok(e.nota_geral) ? `${e.nota_geral}<small>/100</small>` : '–'], ['Liquidez/dia', dinheiro(e.liquidez)]]
-        .map(([r, v]) => `<div><span>${r}</span><b>${v}</b></div>`).join('')}
-    </div>
+    <div class="ativo-numeros">${numeros([['Valor de mercado', dinheiro(e.vm)], ['P/L', num(e.pl)], ['P/VP', num(e.pvp, 2)], ['Dividendos 12m', pct(e.dy)],
+      ['ROE', pct(e.roe)], ['Nota geral', ok(e.nota_geral) ? `${e.nota_geral}<small>/100</small>` : '–'], ['Liquidez/dia', dinheiro(e.liquidez)]])}</div>
     <nav class="ativo-secoes" aria-label="Seções do ativo">${SECOES_ATIVO.map(([k, r]) => `<a href="#" data-secao="${k}">${r}</a>`).join('')}
       <a class="botao botao-principal" href="#comparar/${encodeURIComponent(ticker)}">Comparar</a></nav>
 
@@ -1177,19 +1217,33 @@ function montarAtivo(el, ticker) {
             .map(([r, v]) => `<div class="medidor"><span>${r}</span>${ok(v) ? `<i style="--v:${v}%"></i><span>${v}</span>` : '<span class="vazio">–</span>'}</div>`).join('')}
           ${e.magica_posicao ? `<div class="tile-sub">Fórmula Mágica: ${e.magica_posicao}ª posição</div>` : ''}</div></div>
         <div class="bloco"><h3>Preço contra o próprio histórico</h3><dl class="lista">
-          ${linha('P/L hoje', num(e.pl))}${linha('Mediana desde 2020', num(e.pl_mediana))}
-          ${linha('Faixa barata–cara', ok(e.pl_p25) ? `${num(e.pl_p25)} a ${num(e.pl_p75)}` : '–', 'Percentis 25 e 75 do P/L mês a mês desde 2020')}
-          ${linha('Mais barato que em', ok(e.pl_percentil) ? `${num(100 - e.pl_percentil, 0)}% dos meses` : '–')}
-          ${g && ok(g.normal) ? linha('Preço normal / caro', `R$ ${num(g.normal, 2)} / R$ ${num(g.caro, 2)}`, 'Preço em que o P/L volta à mediana e ao percentil 75, com o lucro de hoje') : ''}
+          ${linha('P/L hoje', num(e.pl), EXPLICA['P/L'])}${linha('Mediana desde 2020', num(e.pl_mediana), 'O P/L típico da própria empresa desde 2020: a referência de "preço normal".')}
+          ${linha('Faixa barata–cara', ok(e.pl_p25) ? `${num(e.pl_p25)} a ${num(e.pl_p75)}` : '–', 'Percentis 25 e 75 do P/L mês a mês desde 2020: abaixo do primeiro está barata; acima do segundo, cara.')}
+          ${linha('Mais barato que em', ok(e.pl_percentil) ? `${num(100 - e.pl_percentil, 0)}% dos meses` : '–', 'Em quantos meses desde 2020 o P/L esteve mais alto que hoje.')}
+          ${g && ok(g.normal) ? linha('Preço normal / caro', `R$ ${num(g.normal, 2)} / R$ ${num(g.caro, 2)}`, 'Preço em que o P/L volta à mediana e ao percentil 75, com o lucro de hoje.') : ''}
         </dl>${g ? `<div class="selos" style="margin-top:8px"><span class="selo">${g.st}</span></div>` : ''}</div>
         <div class="bloco"><h3>Preço justo pelos métodos clássicos</h3><dl class="lista">
-          ${linha('Graham', ok(justoGraham) ? `R$ ${num(justoGraham, 2)} ${sinal(e.graham_margem)}` : '–', '√(22,5 × lucro por ação × patrimônio por ação)')}
-          ${linha('Bazin (preço-teto)', ok(tetoBazin) ? `R$ ${num(tetoBazin, 2)} ${sinal(e.bazin_margem)}` : '–', 'Dividendo médio de 3 anos ÷ 6%')}
-          ${linha('Lucro / preço', pct(e.earnings_yield), 'Inverso do P/L')}
-          ${linha('Contra Tesouro IPCA+', `<span class="${classeSinal(e.premio_vs_tesouro)}">${ok(e.premio_vs_tesouro) ? (e.premio_vs_tesouro > 0 ? '+' : '') + num(e.premio_vs_tesouro * 100, 1) + ' p.p.' : '–'}</span>`, `Lucro/preço menos a taxa real do Tesouro IPCA+ (${num(e.tesouro_ipca_ref, 2)}%)`)}
-        </dl><div class="tile-sub" style="margin-top:6px">Percentual: distância do preço de hoje.</div></div>
+          ${linha('Graham', ok(justoGraham) ? `R$ ${num(justoGraham, 2)} ${sinal(e.graham_margem)}` : '–')}
+          ${linha('Bazin (preço-teto)', ok(tetoBazin) ? `R$ ${num(tetoBazin, 2)} ${sinal(e.bazin_margem)}` : '–')}
+          ${linha('Lucro / preço', pct(e.earnings_yield))}
+          ${linha('Contra Tesouro IPCA+', `<span class="${classeSinal(e.premio_vs_tesouro)}">${ok(e.premio_vs_tesouro) ? (e.premio_vs_tesouro > 0 ? '+' : '') + num(e.premio_vs_tesouro * 100, 1) + ' p.p.' : '–'}</span>`)}
+        </dl><div class="tile-sub" style="margin-top:6px">Percentual: distância do preço de hoje. Clique no nome de um indicador para ver o que ele mede.</div></div>
+        <div class="bloco"><h3>Sobre a empresa</h3><dl class="lista">
+          ${linha('Setor', esc(e.setor))}${e.segmento ? linha('Listagem', esc(e.segmento), 'Nível de governança na B3. Novo Mercado é o mais exigente: só ações ON e tag along de 100%.') : ''}
+          ${e.controle ? linha('Controle', esc(e.controle.toLowerCase()), 'Quem controla a empresa. Estatais podem sofrer interferência do governo.') : ''}
+          ${linha('CNPJ', esc(e.cnpj))}${linha('Balanço mais recente', data(e.dt_balanco))}
+          ${proximoResultado(e) ? linha('Próximo resultado', proximoResultado(e).replace(/<[^>]+>/g, '').replace(/^Resultado [^:]*: /, '')) : ''}
+        </dl><div id="a-eventos" class="tile-sub" style="margin-top:6px"></div></div>
       </div>
-      <div class="graficos"><div class="grafico-bloco"><h3>P/L mês a mês</h3><div class="tile-sub">Linha cinza: mediana desde 2020. Meses sem lucro ficam em branco.</div><div class="grafico" id="g-pl"></div></div>
+    </section>
+
+    <section class="ativo-secao" id="s-cotacao"><h3 class="secao">Cotação</h3>
+      <div class="grafico-bloco"><div class="mapa-topo"><div><h3>Cotação de ${esc(ticker)}</h3><div class="tile-sub" id="a-preco-sub">Carregando…</div></div>
+        <span class="segmentado" role="group" aria-label="Período">${[['1m', '1M'], ['6m', '6M'], ['1a', '1A'], ['5a', '5A'], ['max', 'Máx']].map(([k, r]) =>
+          `<button data-periodo="${k}" aria-pressed="${k === '1a'}">${r}</button>`).join('')}</span></div>
+        <div class="grafico" id="g-preco"></div>
+        <div class="tile-sub">Fechamento diário ajustado por desdobramentos, grupamentos e bonificações (não por dividendos).</div></div>
+      <div class="graficos" style="margin-top:12px"><div class="grafico-bloco"><h3>P/L mês a mês</h3><div class="tile-sub">Linha cinza: mediana desde 2020. Meses sem lucro ficam em branco.</div><div class="grafico" id="g-pl"></div></div>
         <div class="grafico-bloco"><h3>P/VP mês a mês</h3><div class="tile-sub">Preço sobre patrimônio líquido</div><div class="grafico" id="g-pvp"></div></div></div>
     </section>
 
@@ -1222,24 +1276,40 @@ function montarAtivo(el, ticker) {
     </section>
 
     <section class="ativo-secao" id="s-dividendos"><h3 class="secao">Dividendos</h3>
-      <div class="ativo-numeros ativo-numeros-p">
-        ${[['Dividendos 12m', pct(e.dy)], ['Média de 3 anos', pct(e.dy_3a)], ['Mediana desde 2020', pct(e.dy_mediana)], ['Payout 12m', pct(e.payout)],
-          ['Pago em 12 meses', dinheiro(e.dividendos_12m)], ['Anos pagando', `${e.anos_dividendo} de ${Math.min(5, e.anos_lucro_base)}`],
-          ['Preço-teto Bazin', ok(tetoBazin) ? `R$ ${num(tetoBazin, 2)}` : '–']].map(([r, v]) => `<div><span>${r}</span><b>${v}</b></div>`).join('')}
-      </div>
+      <div class="ativo-numeros ativo-numeros-p" id="a-div-numeros">${numeros([['Dividendos 12m', pct(e.dy)], ['Média de 3 anos', pct(e.dy_3a)], ['Payout 12m', pct(e.payout)],
+        ['Pago em 12 meses', dinheiro(e.dividendos_12m)], ['Preço-teto Bazin', ok(tetoBazin) ? `R$ ${num(tetoBazin, 2)}` : '–']])}</div>
       ${e.payout > 1 ? `<div class="aviso">${ICONE_ALERTA}<div>Nos últimos 12 meses pagou mais do que lucrou (payout ${pct(e.payout, 0)}). Conte com dividendo menor à frente.</div></div>` : ''}
-      <div class="graficos"><div class="grafico-bloco"><h3>Dividendos e JCP pagos por ano</h3><div class="tile-sub">Total pago pela empresa, pela demonstração de fluxo de caixa</div><div class="grafico" id="g-div"></div></div>
+      <div class="graficos"><div class="grafico-bloco"><h3>Proventos por ação, por ano</h3><div class="tile-sub">Dividendos, JCP e rendimentos pela data com, ajustados por desdobramento</div><div class="grafico" id="g-prov-ano"></div></div>
+        <div class="grafico-bloco"><h3>Dividend yield por ano</h3><div class="tile-sub">Soma de cada provento ÷ o preço da ação na data com</div><div class="grafico" id="g-dy-ano"></div></div></div>
+      <div class="graficos"><div class="grafico-bloco"><h3>Em que meses costuma pagar</h3><div class="tile-sub">Pela data com, nos últimos 5 anos: quanto mais escuro, mais vezes</div><div id="a-meses"></div></div>
         <div class="grafico-bloco"><h3>Dividend yield mês a mês</h3><div class="tile-sub">Dividendos de 12 meses sobre o preço de cada mês</div><div class="grafico" id="g-dy"></div></div></div>
+      <div class="grafico-bloco"><h3>Histórico de proventos</h3><div class="tile-sub">Valores por ação como a empresa declarou. Data com: último dia para ter a ação e receber.</div>
+        <div id="a-proventos"><p class="vazio">Carregando…</p></div></div>
     </section>
 
-    <section class="ativo-secao" id="s-resultados"><h3 class="secao">Resultados</h3>
+    <section class="ativo-secao" id="s-contabil"><h3 class="secao">Dados contábeis</h3>
       <div class="graficos"><div class="grafico-bloco"><h3>Lucro líquido por ano</h3><div class="tile-sub">Atribuído aos controladores</div><div class="grafico" id="g-lucro"></div></div>
-        <div class="grafico-bloco"><h3>Lucro por trimestre</h3><div class="tile-sub">Cada trimestre isolado, últimos 8${proximoResultado(e) ? ' · ' + proximoResultado(e).replace(/<[^>]+>/g, '') : ''}</div><div class="grafico" id="g-tri"></div></div></div>
-      <div class="tabela-caixa" style="max-height:none"><table class="tabela-dre"><thead><tr><th>Ano</th><th>${fin ? 'Receitas de intermediação' : 'Receita líquida'}</th><th>Lucro</th><th>Margem</th><th>Dividendos pagos</th><th>Payout</th>${fin ? '' : '<th>Dívida líquida</th>'}<th>Patrimônio</th></tr></thead>
-        <tbody>${[...anos].reverse().map(a => `<tr style="cursor:default"><td>${a[0]}</td><td>${dinheiro(a[1])}</td><td class="${a[2] < 0 ? 'negativo' : ''}">${dinheiro(a[2])}</td>
-          <td>${ok(a[1]) && a[1] > 0 && ok(a[2]) ? pct(a[2] / a[1]) : '–'}</td><td>${dinheiro(a[3])}</td><td>${ok(a[3]) && a[2] > 0 ? pct(Math.abs(a[3]) / a[2], 0) : '–'}</td>
-          ${fin ? '' : `<td>${dinheiro(a[4])}</td>`}<td>${dinheiro(a[5])}</td></tr>`).join('')}</tbody></table></div>
-      <p class="tile-sub">Balanço mais recente: ${data(e.dt_balanco)} · preços de ${data(e.data)} · CNPJ ${esc(e.cnpj)}</p>
+        <div class="grafico-bloco"><h3>Lucro por trimestre</h3><div class="tile-sub">Cada trimestre isolado, últimos 8${proximoResultado(e) ? ' · ' + proximoResultado(e).replace(/<[^>]+>/g, '') : ''}</div><div class="grafico" id="g-tri"></div></div>
+        <div class="grafico-bloco"><h3>${fin ? 'Receitas de intermediação' : 'Receita líquida'} por ano</h3><div class="tile-sub">&nbsp;</div><div class="grafico" id="g-receita"></div></div>
+        <div class="grafico-bloco"><h3>Dividendos e JCP pagos por ano</h3><div class="tile-sub">Total pago pela empresa, pela demonstração de fluxo de caixa</div><div class="grafico" id="g-div"></div></div></div>
+      ${anos.length ? `<div class="tabela-caixa" style="max-height:none"><table class="tabela-contabil"><thead><tr><th class="esq">Em reais</th>${[...anos].reverse().map(a => `<th>${a[0]}</th>`).join('')}</tr></thead><tbody>
+        <tr class="grupo"><td class="esq" colspan="${anos.length + 1}">Resultado</td></tr>
+        ${linhaTabela(fin ? 'Receitas de intermediação' : 'Receita líquida', a => dinheiro(a[1]))}
+        ${fin ? '' : linhaTabela('EBIT (lucro operacional)', a => dinheiro(a[6]))}
+        ${linhaTabela('Lucro líquido', a => `<span class="${a[2] < 0 ? 'negativo' : ''}">${dinheiro(a[2])}</span>`)}
+        ${linhaTabela('Margem líquida', a => (a[1] > 0 && ok(a[2]) ? pct(a[2] / a[1]) : '–'))}
+        ${linhaTabela('ROE', a => (a[5] > 0 && ok(a[2]) ? pct(a[2] / a[5]) : '–'))}
+        <tr class="grupo"><td class="esq" colspan="${anos.length + 1}">Balanço</td></tr>
+        ${linhaTabela('Ativo total', a => dinheiro(a[7]))}
+        ${linhaTabela('Patrimônio líquido', a => dinheiro(a[5]))}
+        ${fin ? '' : linhaTabela('Caixa', a => dinheiro(a[8])) + linhaTabela('Dívida bruta', a => dinheiro(a[9])) + linhaTabela('Dívida líquida', a => dinheiro(a[4]))}
+        <tr class="grupo"><td class="esq" colspan="${anos.length + 1}">Fluxo de caixa</td></tr>
+        ${linhaTabela('Caixa das operações', a => dinheiro(a[10]), 'Dinheiro que a operação gerou no ano')}
+        ${fin ? '' : linhaTabela('Investimentos (capex)', a => dinheiro(ok(a[11]) ? -Math.abs(a[11]) : null), 'Compra de imobilizado e intangível')}
+        ${fin ? '' : linhaTabela('Caixa livre', a => (ok(a[10]) && ok(a[11]) ? `<span class="${a[10] - Math.abs(a[11]) < 0 ? 'negativo' : ''}">${dinheiro(a[10] - Math.abs(a[11]))}</span>` : '–'), 'Caixa das operações menos investimentos: o que sobra para dividendos e dívida')}
+        ${linhaTabela('Proventos pagos', a => dinheiro(ok(a[3]) ? Math.abs(a[3]) : null))}
+        ${linhaTabela('Payout', a => (ok(a[3]) && a[2] > 0 ? pct(Math.abs(a[3]) / a[2], 0) : '–'))}
+      </tbody></table></div>` : ''}
       ${e.acoes_fre ? `<p class="tile-sub">${esc(e.acoes_fre)}. O valor de mercado e os múltiplos já usam a quantidade nova.</p>` : ''}
     </section>
 
@@ -1251,6 +1321,18 @@ function montarAtivo(el, ticker) {
           ${fin ? '' : `<td>${x.div_liq_ebitda >= 99 ? 'n/a' : num(x.div_liq_ebitda)}</td>`}</tr>`).join('')}
           <tr class="linha-mediana" style="cursor:default"><td class="esq"><b>Mediana do setor</b></td><td>${dinheiro(mediana('vm'))}</td><td>${medidor(mediana('nota_geral'))}</td><td>${num(mediana('pl'))}</td>
           <td>${num(mediana('pvp'), 2)}</td><td>${pct(mediana('dy'))}</td><td>${pct(mediana('roe'))}</td><td>${pct(mediana('margem_liq'))}</td>${fin ? '' : `<td>${num(mediana('div_liq_ebitda'))}</td>`}</tr></tbody></table></div>
+    </section>
+
+    <section class="ativo-secao" id="s-simulador"><h3 class="secao">Simulador de rentabilidade</h3>
+      <div class="grafico-bloco"><p class="tile-sub" style="margin:0 0 10px">Quanto teria hoje quem tivesse investido em ${esc(ticker)} no passado, com aporte todo mês, contra o mesmo dinheiro no CDI.
+        Usa o fechamento diário ajustado e os proventos pela data com. Não considera imposto nem taxas.</p>
+        <div class="filtros simulador-campos">
+          <label>Período <select id="sim-anos">${[1, 3, 5, 10].map(a => `<option value="${a}" ${a === 5 ? 'selected' : ''}>${a} ano${a > 1 ? 's' : ''}</option>`).join('')}</select></label>
+          <label>Aporte inicial <input class="campo" id="sim-inicial" type="number" min="0" step="100" value="1000" style="width:110px"></label>
+          <label>Aporte mensal <input class="campo" id="sim-mensal" type="number" min="0" step="50" value="300" style="width:100px"></label>
+          <label><input type="checkbox" id="sim-reinveste" checked> Reinvestir os proventos</label>
+        </div>
+        <div id="sim-resultado"><p class="vazio">Carregando…</p></div></div>
     </section>`;
 
   window.scrollTo(0, 0);
@@ -1263,6 +1345,16 @@ function montarAtivo(el, ticker) {
     window.scrollTo({ top: alvo.getBoundingClientRect().top + scrollY - grudado, behavior: 'smooth' });
   });
   for (const tr of el.querySelectorAll('#s-setor tr[data-ticker]')) tr.addEventListener('click', () => irPara(`empresa/${tr.dataset.ticker}`));
+  // Clique no nome do indicador abre a explicação logo abaixo
+  for (const dt of el.querySelectorAll('dt.com-explica')) {
+    const abrir = () => {
+      const prox = dt.nextElementSibling?.nextElementSibling;
+      if (prox?.classList.contains('explica')) { prox.remove(); return; }
+      dt.nextElementSibling.insertAdjacentHTML('afterend', `<p class="explica">${esc(dt.dataset.explica)}</p>`);
+    };
+    dt.addEventListener('click', abrir);
+    dt.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); abrir(); } });
+  }
   // Seção visível destacada no menu de seções
   const links = new Map([...el.querySelectorAll('[data-secao]')].map(a => [`s-${a.dataset.secao}`, a]));
   observadorSecoes?.disconnect();
@@ -1279,10 +1371,168 @@ function montarAtivo(el, ticker) {
     graficoColunas($('#g-divida'), { pontos: anos.map(a => [String(a[0]), a[4]]), fmt: dinheiro });
   }
   graficoColunas($('#g-lucro'), { pontos: anos.map(a => [String(a[0]), a[2]]), fmt: dinheiro });
+  graficoColunas($('#g-receita'), { pontos: anos.map(a => [String(a[0]), a[1]]), fmt: dinheiro });
   graficoColunas($('#g-div'), { pontos: anos.map(a => [String(a[0]), a[3] == null ? null : Math.abs(a[3])]), fmt: dinheiro });
   graficoColunas($('#g-tri'), { pontos: (D.trimestres?.[e.cnpj] ?? []).slice(-8).map(t => [rotuloTrimestre(t[0]), t[1]]), fmt: dinheiro });
+
+  carregarAtivo(ticker).then(dados => {
+    if (abaAtual !== 'ativo' || $('#ativo-titulo')?.textContent !== ticker) return;
+    if (!dados) {
+      for (const id of ['#a-preco-sub', '#a-proventos', '#sim-resultado']) $(id).innerHTML = '<span class="vazio">Histórico diário indisponível (abra pelo site publicado ou pelo servidor local).</span>';
+      return;
+    }
+    desenharCotacao(dados, '1a');
+    for (const b of el.querySelectorAll('[data-periodo]')) b.addEventListener('click', () => {
+      for (const x of el.querySelectorAll('[data-periodo]')) x.setAttribute('aria-pressed', x === b);
+      desenharCotacao(dados, b.dataset.periodo);
+    });
+    desenharProventos(dados, e);
+    const sim = () => simular(dados);
+    for (const id of ['#sim-anos', '#sim-inicial', '#sim-mensal', '#sim-reinveste']) $(id).addEventListener('change', sim);
+    sim();
+  });
 }
-let observadorSecoes = null;
+
+// Cotação do período, com a variação e a variação somando os proventos
+function desenharCotacao(dados, periodo) {
+  const ult = dados.precos.at(-1)[0];
+  const dias = { '1m': 31, '6m': 183, '1a': 366, '5a': 1827, max: 1e5 }[periodo];
+  const desde = new Date(Date.parse(ult) - dias * 864e5).toISOString().slice(0, 10);
+  const pts = dados.precos.filter(x => x[0] >= desde);
+  const v = pts.at(-1)[1] / pts[0][1] - 1;
+  const prov = dados.proventos.filter(x => x[0] > pts[0][0]).reduce((s, x) => s + x[4], 0);
+  $('#a-preco-sub').innerHTML = `${data(pts[0][0])} a ${data(ult)}: <b class="${classeSinal(v)}">${pctSinal(v)}</b> no preço${prov > 0
+    ? ` · <b class="${classeSinal(v + prov / pts[0][1])}">${pctSinal(v + prov / pts[0][1])}</b> somando R$ ${num(prov, 2)} de proventos por ação` : ''}`;
+  graficoDiario($('#g-preco'), { pontos: pts, fmt: x => `R$ ${num(x, 2)}`, cor: v >= 0 ? 'var(--serie-3)' : 'var(--negativo-col)' });
+}
+
+function desenharProventos(dados, e) {
+  const prov = dados.proventos;
+  if (!prov.length) { $('#a-proventos').innerHTML = '<p class="vazio">A B3 não registra proventos para este código.</p>'; return; }
+  // Por ano: soma ajustada por ação e yield de cada pagamento sobre o preço da data com
+  const porAno = new Map();
+  for (const x of prov) {
+    const a = x[0].slice(0, 4), s = porAno.get(a) ?? { valor: 0, dy: 0 };
+    s.valor += x[4];
+    if (x[5] > 0) s.dy += x[3] / x[5];
+    porAno.set(a, s);
+  }
+  const anos = [...porAno].sort((a, b) => a[0].localeCompare(b[0])).filter(([a]) => a >= '2012');
+  graficoColunas($('#g-prov-ano'), { pontos: anos.map(([a, s]) => [a, s.valor]), fmt: v => `R$ ${num(v, 2)}` });
+  graficoColunas($('#g-dy-ano'), { pontos: anos.map(([a, s]) => [a, s.dy]), fmt: v => pct(v), fmtEixo: v => pct(v, 0) });
+  // Meses de pagamento nos últimos 5 anos
+  const ano0 = String(Number(hojeIso().slice(0, 4)) - 5);
+  const meses = Array(12).fill(0), vistos = new Set();
+  for (const x of prov) if (x[0] > ano0 && !vistos.has(x[0].slice(0, 7))) { vistos.add(x[0].slice(0, 7)); meses[Number(x[0].slice(5, 7)) - 1]++; }
+  const mx = Math.max(1, ...meses);
+  $('#a-meses').innerHTML = `<div class="meses-grade">${['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'].map((m, i) =>
+    `<div class="mes ${meses[i] ? 'com' : ''}" style="--f:${meses[i] / mx}" title="${meses[i]} ${meses[i] === 1 ? 'ano' : 'anos'} com data com em ${m}"><b>${m}</b><span>${meses[i] ? `${meses[i]}×` : '–'}</span></div>`).join('')}</div>`;
+  // Números do topo da seção: último provento e soma de 12 meses
+  const ultimo = prov[0];
+  const umAno = new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10);
+  const soma12 = prov.filter(x => x[0] >= umAno).reduce((s, x) => s + x[4], 0);
+  $('#a-div-numeros').insertAdjacentHTML('afterbegin', `<div><span>Último provento</span><b>R$ ${num(ultimo[3], 4)}</b></div>
+    <div><span>Data com do último</span><b>${data(ultimo[0])}</b></div><div><span>Por ação em 12 meses</span><b>R$ ${num(soma12, 2)}</b></div>`);
+  // Tabela: 15 mais recentes, com botão para ver todos
+  const linhas = (lista) => lista.map(x => `<tr style="cursor:default"><td class="esq">${esc(x[2])}</td><td>${data(x[0])}</td><td>${x[1] ? data(x[1]) : '<span class="vazio">–</span>'}</td>
+    <td>R$ ${num(x[3], 4)}</td><td>${x[5] > 0 ? pct(x[3] / x[5], 2) : '–'}</td></tr>`).join('');
+  const tabela = lista => `<div class="tabela-caixa" style="max-height:none"><table><thead><tr><th class="esq">Tipo</th><th>Data com</th><th>Pagamento</th><th>Valor por ação</th><th title="Valor ÷ preço da ação na data com">Yield</th></tr></thead>
+    <tbody>${linhas(lista)}</tbody></table></div>`;
+  $('#a-proventos').innerHTML = tabela(prov.slice(0, 15)) + (prov.length > 15 ? `<button class="botao" id="a-prov-todos" style="margin-top:8px">Ver todos (${prov.length})</button>` : '');
+  $('#a-prov-todos')?.addEventListener('click', () => { $('#a-proventos').innerHTML = tabela(prov); });
+  // Desdobramentos e afins desde 2010
+  const ev = dados.eventos.filter(x => x[0] >= '2010');
+  if (ev.length) $('#a-eventos').innerHTML = `<b>Desdobramentos e bonificações:</b> ${ev.map(x => `${x[1].toLowerCase().replace('bonificacao', 'bonificação')} em ${data(x[0])} (${x[1] === 'GRUPAMENTO' ? `${num(1 / x[2], 0)} para 1` : `${num(x[2], x[2] % 1 ? 1 : 0)}%`})`).join('; ')}.`;
+}
+
+// Investimento passado com aportes mensais, contra o mesmo fluxo no CDI
+function simular(dados) {
+  const anos = Number($('#sim-anos').value), inicial = Math.max(0, Number($('#sim-inicial').value) || 0);
+  const mensal = Math.max(0, Number($('#sim-mensal').value) || 0), reinveste = $('#sim-reinveste').checked;
+  const precos = dados.precos, ult = precos.at(-1)[0];
+  const desde = new Date(Date.parse(ult) - anos * 365.25 * 864e5).toISOString().slice(0, 10);
+  const pts = precos.filter(x => x[0] >= desde);
+  if (pts.length < 20 || (!inicial && !mensal)) { $('#sim-resultado').innerHTML = '<p class="vazio">Histórico curto demais para esse período.</p>'; return; }
+  if (pts[0][0] > new Date(Date.parse(desde) + 40 * 864e5).toISOString().slice(0, 10)) {
+    $('#sim-resultado').innerHTML = `<p class="vazio">A ação só tem cotação desde ${data(pts[0][0])}.</p>`; return;
+  }
+  const prov = new Map();
+  for (const x of dados.proventos) if (x[0] >= pts[0][0]) prov.set(x[0], (prov.get(x[0]) ?? 0) + x[4]);
+  const cdi = new Map((D.cdi_diario ?? []).map(x => [x[0], x[1]]));
+  let acoes = inicial / pts[0][1], investido = inicial, recebido = 0, caixa = 0, saldoCdi = inicial, mes = pts[0][0].slice(0, 7);
+  const serie = new Map();
+  for (const [d, preco] of pts) {
+    if (d !== pts[0][0]) saldoCdi *= 1 + (cdi.get(d) ?? 0) / 100;
+    if (d.slice(0, 7) !== mes) { mes = d.slice(0, 7); acoes += mensal / preco; investido += mensal; saldoCdi += mensal; }
+    const pr = prov.get(d);
+    if (pr) { const v = acoes * pr; recebido += v; if (reinveste) acoes += v / preco; else caixa += v; }
+    serie.set(d.slice(0, 7), [acoes * preco + caixa, saldoCdi, investido]);
+  }
+  const final = acoes * pts.at(-1)[1] + caixa;
+  const ganho = final / investido - 1, ganhoCdi = saldoCdi / investido - 1;
+  const meses = [...serie.keys()];
+  $('#sim-resultado').innerHTML = `<div class="ativo-numeros ativo-numeros-p">
+      <div><span>Total investido</span><b>${dinheiro(investido)}</b></div>
+      <div><span>Saldo hoje</span><b>${dinheiro(final)}</b></div>
+      <div><span>Resultado</span><b class="${classeSinal(ganho)}">${pctSinal(ganho)}</b></div>
+      <div><span>Proventos recebidos</span><b>${dinheiro(recebido)}</b></div>
+      <div><span>Mesmo dinheiro no CDI</span><b>${dinheiro(saldoCdi)}</b></div>
+      <div><span>Contra o CDI</span><b class="${classeSinal(final - saldoCdi)}">${final >= saldoCdi ? '+' : '−'}${dinheiro(Math.abs(final - saldoCdi))}</b></div></div>
+    <p class="tile-sub" style="margin:0 0 6px">De ${data(pts[0][0])} a ${data(pts.at(-1)[0])}. ${reinveste ? 'Proventos reinvestidos em ações na data com.' : 'Proventos guardados em caixa, sem render.'}
+      O CDI rendeu ${pctSinal(ganhoCdi)} sobre o mesmo dinheiro.</p>
+    <div class="grafico" id="g-sim"></div>`;
+  graficoLinhas($('#g-sim'), { series: [
+    { nome: `${dados.t}`, cor: 'var(--serie-1)', pontos: meses.map(m => [m, serie.get(m)[0]]) },
+    { nome: 'CDI', cor: 'var(--serie-4)', pontos: meses.map(m => [m, serie.get(m)[1]]) },
+    { nome: 'Investido', cor: 'var(--texto-3)', pontos: meses.map(m => [m, serie.get(m)[2]]) }], fmt: dinheiro, eixoZero: true });
+}
+
+// Linha diária com área: eixo de datas, dica ao passar o mouse
+function graficoDiario(el, { pontos, fmt, cor = 'var(--serie-1)', altura = 260 }) {
+  el.innerHTML = '';
+  if (pontos.length < 2) { el.innerHTML = '<p class="vazio">Sem histórico suficiente.</p>'; return; }
+  const vals = pontos.map(p => p[1]);
+  const idGrad = `grad${Math.random().toString(36).slice(2)}`;
+  const longo = Date.parse(pontos.at(-1)[0]) - Date.parse(pontos[0][0]) > 400 * 864e5;
+  const rotX = d => longo ? mesAno(d.slice(0, 7)) : `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+  montarGrafico(el, w => {
+    const esc_ = escalaBonita(Math.min(...vals), Math.max(...vals));
+    const passo = esc_.marcas[1] - esc_.marcas[0];
+    const rotY = v => num(v, casas(passo));
+    const m = { e: Math.max(...esc_.marcas.map(v => rotY(v).length)) * 6.5 + 10, d: 12, t: 8, b: 24 };
+    const pw = w - m.e - m.d, ph = altura - m.t - m.b;
+    const X = i => m.e + i * pw / (pontos.length - 1);
+    const Y = v => m.t + ph - (v - esc_.ini) / (esc_.fim - esc_.ini) * ph;
+    const linhaD = pontos.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('');
+    const nRot = Math.max(2, Math.floor(pw / 90));
+    let svg = `<svg width="${w}" height="${altura}" role="img" aria-label="Cotação">
+      <defs><linearGradient id="${idGrad}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${cor}" stop-opacity=".22"/><stop offset="1" stop-color="${cor}" stop-opacity="0"/></linearGradient></defs>`;
+    for (const v of esc_.marcas) svg += `<line x1="${m.e}" x2="${w - m.d}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--grade)"/><text x="${m.e - 6}" y="${Y(v) + 4}" text-anchor="end">${rotY(v)}</text>`;
+    for (let k = 0; k < nRot; k++) {
+      const i = Math.round(k * (pontos.length - 1) / (nRot - 1));
+      svg += `<text x="${X(i)}" y="${altura - 6}" text-anchor="${k === 0 ? 'start' : k === nRot - 1 ? 'end' : 'middle'}">${rotX(pontos[i][0])}</text>`;
+    }
+    svg += `<path d="${linhaD}L${X(pontos.length - 1)},${m.t + ph}L${X(0)},${m.t + ph}Z" fill="url(#${idGrad})"/>
+      <path d="${linhaD}" fill="none" stroke="${cor}" stroke-width="2" stroke-linejoin="round"/>
+      <line class="cruz" y1="${m.t}" y2="${m.t + ph}" stroke="var(--texto-3)" visibility="hidden"/><circle class="ponto" r="4" fill="${cor}" stroke="var(--superficie)" stroke-width="2" visibility="hidden"/>
+      <rect class="alvo" x="${m.e}" y="${m.t}" width="${pw}" height="${ph}" fill="transparent"/></svg>`;
+    el.innerHTML = svg;
+    const alvo = $('.alvo', el), cruz = $('.cruz', el), ponto = $('.ponto', el);
+    const mover = ev => {
+      const r = alvo.getBoundingClientRect(), cx = (ev.touches?.[0] ?? ev).clientX, cy = (ev.touches?.[0] ?? ev).clientY;
+      const i = Math.max(0, Math.min(pontos.length - 1, Math.round((cx - r.left) / r.width * (pontos.length - 1))));
+      for (const a of ['x1', 'x2']) cruz.setAttribute(a, X(i));
+      cruz.setAttribute('visibility', 'visible');
+      ponto.setAttribute('cx', X(i)); ponto.setAttribute('cy', Y(pontos[i][1])); ponto.setAttribute('visibility', 'visible');
+      mostrarDica(`<div class="dica-titulo">${data(pontos[i][0])}</div><b>${esc(fmt(pontos[i][1]))}</b>`, cx, cy);
+    };
+    const sair = () => { cruz.setAttribute('visibility', 'hidden'); ponto.setAttribute('visibility', 'hidden'); esconderDica(); };
+    alvo.addEventListener('mousemove', mover);
+    alvo.addEventListener('touchmove', mover, { passive: true });
+    alvo.addEventListener('mouseleave', sair);
+    alvo.addEventListener('touchend', sair);
+  });
+}
 
 // ---------- Comparar ----------
 const LINHAS_COMPARAR = [
@@ -1700,13 +1950,14 @@ function graficoLinhas(el, { series, fmt, fmtEixo = null, ref = null, altura = 2
   });
 }
 
-function graficoColunas(el, { pontos, fmt, altura = 200 }) {
+function graficoColunas(el, { pontos, fmt, altura = 200, fmtEixo = null }) {
   const vals = pontos.map(p => p[1]).filter(ok);
   el.innerHTML = '';
   if (!vals.length) { el.innerHTML = '<p class="vazio">Sem dados.</p>'; return; }
   montarGrafico(el, w => {
     const esc_ = escalaBonita(Math.min(0, ...vals), Math.max(0, ...vals));
-    const rotY = v => compacto(v) ?? num(v, 0);
+    const passo = esc_.marcas[1] - esc_.marcas[0];
+    const rotY = v => compacto(v) ?? (fmtEixo ? fmtEixo(v) : num(v, casas(passo)));
     const m = { e: Math.max(...esc_.marcas.map(v => rotY(v).length)) * 6.5 + 10, d: 8, t: 8, b: 24 };
     const pw = w - m.e - m.d, ph = altura - m.t - m.b;
     const faixa = pw / pontos.length, larg = Math.min(24, faixa * 0.6);

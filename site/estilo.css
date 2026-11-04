@@ -259,6 +259,21 @@ a.bloco-link:hover { border-color: var(--destaque); }
 .ativo-secao { scroll-margin-top: 120px; }
 .linha-atual td { background: color-mix(in srgb, var(--destaque) 9%, var(--superficie)) !important; font-weight: 600; }
 .linha-mediana td { background: var(--superficie-2); color: var(--texto-2); }
+dt.com-explica { cursor: help; text-decoration: underline dotted var(--texto-3); text-underline-offset: 3px; }
+dt.com-explica:hover { color: var(--texto); }
+.explica { grid-column: 1 / -1; margin: -2px 0 4px; padding: 8px 10px; font-size: .8rem; line-height: 1.45; color: var(--texto-2);
+  background: var(--superficie-2); border-radius: var(--raio-p); border-left: 3px solid var(--destaque); }
+.ativo-numeros-p { margin-bottom: 12px; }
+.ativo-numeros-p b { font-size: 1rem; }
+.meses-grade { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-top: 10px; }
+.mes { border-radius: var(--raio-p); padding: 10px 4px; text-align: center; background: var(--superficie-2); border: 1px solid var(--linha); }
+.mes.com { background: color-mix(in srgb, var(--serie-3) calc(15% + var(--f) * 70%), var(--superficie)); border-color: transparent; }
+.mes b { display: block; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+.mes span { font-size: .74rem; color: var(--texto-2); }
+.tabela-contabil tr.grupo td { background: var(--superficie-2); color: var(--texto-3); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; padding: 6px 12px; }
+.simulador-campos label { gap: 8px; }
+.simulador-campos select { background: var(--superficie); border: 1px solid var(--linha); border-radius: var(--raio-p); padding: 6px 8px; min-height: 36px; }
+
 
 /* ---------- Avisos ---------- */
 .aviso {
