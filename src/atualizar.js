@@ -12,6 +12,7 @@ import { atualizarIntraday } from './intraday.js';
 import { atualizarEtfsExternos } from './externos.js';
 import { atualizarProventos } from './proventos.js';
 import { atualizarEntregas } from './entregas.js';
+import { atualizarItrDoDia } from './itrdia.js';
 import { atualizarTermometro } from './termometro.js';
 import { log, anoAtual } from './util.js';
 
@@ -37,6 +38,8 @@ if (intraday) {
   await etapa('preços do pregão', () => atualizarIntraday(db));
   // Resultado entregue à CVM hoje: a página avisa que os números ainda são do trimestre anterior
   try { await atualizarEntregas(db); } catch (e) { log('Entregas à CVM indisponíveis agora:', e.message); }
+  // ITR entregue hoje: os números entram já, sem esperar o arquivo aberto de domingo
+  try { await atualizarItrDoDia(db); } catch (e) { log('ITR do dia indisponível agora:', e.message); }
 } else {
   await etapa('cadastro', () => atualizarCadastro(db, ano));
   if (cargaInicial) {
@@ -60,6 +63,7 @@ if (intraday) {
   await etapa('Banco Central', () => atualizarBcb(db, ANO_INICIO));
   await etapa('Tesouro', () => atualizarTesouro(db, ANO_INICIO));
   await etapa('entregas de resultados à CVM', () => atualizarEntregas(db));
+  await etapa('ITR do dia (direto da CVM)', () => atualizarItrDoDia(db));
   // Susep, Anatel e ONS: dados do setor que saem antes do balanço (só baixa o que mudou)
   await etapa('termômetro do trimestre', () => atualizarTermometro(db));
   // Pregão em andamento: junta os preços parciais do dia (fora do pregão não grava nada). Sem isso,

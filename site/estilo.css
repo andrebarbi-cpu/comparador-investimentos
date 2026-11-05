@@ -525,3 +525,7 @@ td.melhor::before { content: "● "; color: var(--destaque); font-size: .7em; ve
 .termo-seta { font-size: .74rem; font-weight: 600; white-space: nowrap; color: var(--texto-2); }
 .termo-seta.melhora { color: var(--texto-bom); }
 .termo-seta.piora { color: var(--texto-ruim); }
+
+/* Último resultado trimestral no Resumo da página do ativo */
+.ultimo-resultado .ativo-numeros small { display: block; font-size: .74rem; line-height: 1.35; }
+.ultimo-resultado.recente { border-color: color-mix(in srgb, var(--destaque) 45%, var(--linha)); }

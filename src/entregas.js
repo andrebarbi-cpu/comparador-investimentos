@@ -13,6 +13,9 @@ const semTags = s => (s ?? '').replace(/<[^>]+>/g, '').trim();
 export function criarTabelaEntregas(db) {
   db.exec(`CREATE TABLE IF NOT EXISTS entregas (
     cd_cvm TEXT, tipo TEXT, dt_refer TEXT, dt_entrega TEXT, PRIMARY KEY (cd_cvm, tipo, dt_refer))`);
+  // Identificação do documento no ENET, para baixar o próprio ITR no dia (src/itrdia.js)
+  const cols = db.prepare('PRAGMA table_info(entregas)').all().map(c => c.name);
+  if (!cols.includes('seq')) db.exec('ALTER TABLE entregas ADD COLUMN seq TEXT; ALTER TABLE entregas ADD COLUMN versao INTEGER; ALTER TABLE entregas ADD COLUMN protocolo TEXT');
 }
 
 async function listar(categoria, de, ate) {
@@ -28,7 +31,13 @@ async function listar(categoria, de, ate) {
       if (!d || d.temErro) throw new Error(d?.msgErro || 'resposta vazia');
       // Registros separados por "&*" e campos por "$&": código CVM, empresa, categoria, ..., data de
       // referência ("20260930 30/09/2026"), data de entrega ("20261103 03/11/2026 18:10")
-      return (d.dados ?? '').split('&*').filter(Boolean).map(reg => reg.split('$&').map(semTags));
+      // O link de download vem dentro do HTML do registro: OpenDownloadDocumentos('seq','versão','protocolo','ITR')
+      return (d.dados ?? '').split('&*').filter(Boolean).map(reg => {
+        const campos = reg.split('$&').map(semTags);
+        const dl = /OpenDownloadDocumentos\('(\d+)','(\d+)','([^']+)'/.exec(reg);
+        campos.download = dl ? { seq: dl[1], versao: Number(dl[2]), protocolo: dl[3] } : null;
+        return campos;
+      });
     } catch (e) {
       if (i === 3) throw e;
       await new Promise(res => setTimeout(res, 3000 * i));
@@ -41,15 +50,20 @@ async function listar(categoria, de, ate) {
 export async function atualizarEntregas(db) {
   criarTabelaEntregas(db);
   const ate = new Date(), de = new Date(Date.now() - 60 * 864e5);
-  const ins = db.prepare(`INSERT INTO entregas (cd_cvm, tipo, dt_refer, dt_entrega) VALUES (?, ?, ?, ?)
-    ON CONFLICT DO UPDATE SET dt_entrega = min(entregas.dt_entrega, excluded.dt_entrega)`);
+  // Data: a primeira entrega. Documento: a versão mais recente (reapresentação corrige números)
+  const ins = db.prepare(`INSERT INTO entregas (cd_cvm, tipo, dt_refer, dt_entrega, seq, versao, protocolo) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT DO UPDATE SET dt_entrega = min(entregas.dt_entrega, excluded.dt_entrega),
+      seq = CASE WHEN coalesce(excluded.versao, 0) >= coalesce(entregas.versao, 0) THEN coalesce(excluded.seq, entregas.seq) ELSE entregas.seq END,
+      protocolo = CASE WHEN coalesce(excluded.versao, 0) >= coalesce(entregas.versao, 0) THEN coalesce(excluded.protocolo, entregas.protocolo) ELSE entregas.protocolo END,
+      versao = max(coalesce(excluded.versao, 0), coalesce(entregas.versao, 0))`);
   let n = 0;
   for (const [categoria, tipo] of CATEGORIAS) {
     for (const c of await listar(categoria, de, ate)) {
       const cd = String(Number((c[0] ?? '').replace(/\D/g, '')));
       const ref = /^(\d{4})(\d{2})(\d{2})/.exec(c[5] ?? ''), ent = /^(\d{4})(\d{2})(\d{2})/.exec(c[6] ?? '');
       if (cd === '0' || !ref || !ent) continue;
-      ins.run(cd, tipo, `${ref[1]}-${ref[2]}-${ref[3]}`, `${ent[1]}-${ent[2]}-${ent[3]}`);
+      ins.run(cd, tipo, `${ref[1]}-${ref[2]}-${ref[3]}`, `${ent[1]}-${ent[2]}-${ent[3]}`,
+        c.download?.seq ?? null, c.download?.versao ?? null, c.download?.protocolo ?? null);
       n++;
     }
   }

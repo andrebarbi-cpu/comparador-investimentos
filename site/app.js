@@ -1262,6 +1262,35 @@ const etiquetaTermo = r => ({ melhora: 'etiqueta-compra', piora: 'etiqueta-venda
 const TRANSMISSORAS = new Set(['ALUP', 'TAEE', 'ISAE', 'TRPL']);
 const NOTA_ELETRICA = 'O consumo pesa no resultado de distribuidoras e geradoras. Transmissoras (Alupar, Taesa, ISA) recebem uma receita fixa por contrato e quase não sentem.';
 
+// Quadro do último resultado trimestral, no Resumo da página do ativo. Os números vêm do próprio ITR
+// entregue à CVM, lido no dia da entrega (src/itrdia.js); no domingo o arquivo aberto da CVM confirma.
+function blocoUltimoResultado(e) {
+  const tri = D.trimestres?.[e.cnpj] ?? [];
+  const u = tri.at(-1);
+  if (!u || !ok(u[1])) return '';
+  const acha = ref => tri.find(t => t[0] === ref);
+  const anoAntes = acha(`${Number(u[0].slice(0, 4)) - 1}${u[0].slice(4)}`), anterior = tri.at(-2);
+  const varia = (a, b) => (ok(a) && ok(b) && b > 0 ? a / b - 1 : null);
+  const linhaVar = (rot, atual, base, baseRot) => {
+    const v = varia(atual, base);
+    return v == null ? '' : `<span class="${classeSinal(v)}">${pctSinal(v)}</span> contra ${baseRot}`;
+  };
+  const lucroA = linhaVar('lucro', u[1], anoAntes?.[1], anoAntes ? rotuloTrimestre(anoAntes[0]) : ''),
+    lucroT = linhaVar('lucro', u[1], anterior?.[1], anterior ? rotuloTrimestre(anterior[0]) : '');
+  const receitaA = linhaVar('receita', u[2], anoAntes?.[2], anoAntes ? rotuloTrimestre(anoAntes[0]) : '');
+  const margem = ok(u[2]) && u[2] > 0 ? u[1] / u[2] : null, margemA = anoAntes && ok(anoAntes[2]) && anoAntes[2] > 0 ? anoAntes[1] / anoAntes[2] : null;
+  const recente = u[3] && (Date.parse(hojeIso()) - Date.parse(u[3])) / 864e5 <= 10;
+  return `<div class="grafico-bloco ultimo-resultado${recente ? ' recente' : ''}" style="margin-bottom:12px">
+    <div class="mapa-topo"><div><h3>Resultado do ${rotuloTrimestre(u[0])}${recente ? ' <span class="selo">novo</span>' : ''}</h3>
+      <div class="tile-sub">Entregue à CVM em ${data(u[3] ?? '')} · números do próprio balanço (ITR), trimestre isolado</div></div></div>
+    <div class="ativo-numeros ativo-numeros-p" style="margin:8px 0 0">
+      <div><span>Lucro do trimestre</span><b>${dinheiro(u[1])}</b><small>${[lucroA, lucroT].filter(Boolean).join(' · ') || '–'}</small></div>
+      ${ok(u[2]) && u[2] > 0 ? `<div><span>Receita do trimestre</span><b>${dinheiro(u[2])}</b><small>${receitaA || '–'}</small></div>` : ''}
+      ${ok(margem) ? `<div><span>Margem líquida</span><b>${pct(margem)}</b><small>${ok(margemA) ? `era ${pct(margemA)} um ano antes` : '–'}</small></div>` : ''}
+      <div><span>Lucro em 12 meses</span><b>${dinheiro(e.lucro_12m)}</b><small>ROE ${pct(e.roe)} · P/L ${num(e.pl)}</small></div>
+    </div></div>`;
+}
+
 // Seção da página do ativo (vazia quando a empresa não tem dado do setor)
 function secaoTermometro(e, tk) {
   const k = chaveTermometro(e, tk);
@@ -1407,6 +1436,7 @@ function montarAtivo(el, ticker) {
       <a class="botao botao-principal" href="#comparar/${encodeURIComponent(ticker)}">Comparar</a></nav>
 
     <section class="ativo-secao" id="s-resumo"><h3 class="secao">Resumo</h3>
+      ${blocoUltimoResultado(e)}
       ${e.oportunidade ? `<div class="aviso" style="border-left-color:var(--destaque)"><div><strong>Por que é oportunidade:</strong> ${esc(e.motivo)}.</div></div>` : ''}
       ${!e.elegivel ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Fora do ranking:</strong> ${(e.liquidez ?? 0) < 1e6 ? 'negocia menos de R$ 1 mi por dia' : 'balanço atrasado ou sem lucro informado'}, por isso não recebe nota.</div></div>` : ''}
       ${e.alertas ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Atenção</strong>${listaAlertas(e.alertas)}</div></div>` : ''}

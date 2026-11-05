@@ -212,7 +212,7 @@ export async function atualizarDemonstracoes(db, tipo, ano, { soSeMudou = false 
 // Traduz o plano de contas da CVM para campos fixos. Os códigos de 1º e 2º nível são
 // padronizados; abaixo disso cada empresa nomeia como quer, então a busca é pela descrição.
 // `outro` é o escopo individual, usado quando o consolidado não abre uma linha (ex.: bancos).
-function extrairCampos(c, outro) {
+export function extrairCampos(c, outro) {
   const v = (dem, cod, padrao) => {
     const x = c[dem]?.get(cod);
     if (!x) return null;
