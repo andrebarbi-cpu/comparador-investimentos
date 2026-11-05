@@ -1132,8 +1132,13 @@ function blocoConcentracao(c) {
 }
 
 // ---------- Ranking ----------
+// Aviso ao lado do ticker: lucro fora do normal (as notas já usam o lucro normalizado) ou motivo para conferir
+function avisoRanking(e) {
+  const motivos = [e.lucro_suspeito && 'Lucro de 12 meses fora do normal: as notas usam um lucro normalizado', e.conferir && `Conferir antes: ${e.conferir}`].filter(Boolean);
+  return motivos.length ? ` <span class="aviso-ranking" title="${esc(motivos.join('. '))}">${ICONE_ALERTA.replace('icone-alerta', 'icone-alerta icone-mini')}</span>` : '';
+}
 const COLUNAS = [
-  { k: 'ticker', r: 'Empresa', esq: true, f: (v, e) => `<b>${esc(e.ticker)}</b><span class="nome">${esc(e.nome)}</span>`, cls: 'empresa', texto: true },
+  { k: 'ticker', r: 'Empresa', esq: true, f: (v, e) => `<b>${esc(e.ticker)}</b>${avisoRanking(e)}<span class="nome">${esc(e.nome)}</span>`, cls: 'empresa', texto: true },
   { k: 'setor', r: 'Setor', esq: true, f: v => esc(v), texto: true },
   { k: 'nota_geral', r: 'Nota', f: medidor, maior: 1, dica: 'Média das quatro notas' },
   { k: 'nota_qualidade', r: 'Qualid.', f: medidor, maior: 1, dica: 'ROE, ROIC, margem contra o setor, anos com lucro' },

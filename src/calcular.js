@@ -284,7 +284,7 @@ export function calcular(db) {
 
     // Lucro não recorrente: lucro acima do operacional (venda de ativo, crédito fiscal, renegociação de dívida)
     // ou muito acima da média dos 3 exercícios anteriores. Infla o P/L "barato" e o ROE.
-    let lucroSuspeito = false;
+    let lucroSuspeito = false, lucroNormal = null;
     if (t.lucro_contr > 0) {
       if (!financeira && t.ebit != null && t.lucro_contr > 1.15 * Math.max(t.ebit, 0)) {
         alertas.push(`Lucro de 12 meses (${br(t.lucro_contr / 1e6, 0)} mi) acima do resultado operacional (${br(t.ebit / 1e6, 0)} mi): provável ganho não recorrente`);
@@ -294,6 +294,13 @@ export function calcular(db) {
       if (media3 > 0 && t.lucro_contr > 3 * media3) {
         alertas.push(`Lucro de 12 meses é ${br(t.lucro_contr / media3, 1)}x a média dos 3 anos anteriores`);
         lucroSuspeito = true;
+      }
+      // Lucro "normal" usado nas notas do ranking quando o de 12 meses é suspeito: o menor entre a média dos
+      // 3 anos anteriores e o operacional depois de impostos (EBIT × 0,66). Assim um ganho extraordinário não
+      // vira nota alta de qualidade e preço (Axia, 11/2026: lucro de R$ 18,6 bi com R$ 13,7 bi de um trimestre só)
+      if (lucroSuspeito) {
+        const bases = [media3, !financeira && t.ebit != null ? t.ebit * 0.66 : null].filter(Number.isFinite);
+        if (bases.length) lucroNormal = Math.max(0, Math.min(t.lucro_contr, ...bases));
       }
     }
 
@@ -393,7 +400,7 @@ export function calcular(db) {
       // Graham e Bazin como margem sobre o preço atual
       graham_margem: graham ? graham / precoRef - 1 : null,
       bazin_margem: dy3a != null ? dy3a / 0.06 - 1 : null,
-      lucro_suspeito: lucroSuspeito ? 1 : 0,
+      lucro_suspeito: lucroSuspeito ? 1 : 0, lucro_normalizado: lucroNormal,
       resultado_pendente: resultadoPendente ? `${rotuloTri(resultadoPendente.dt_refer)}|${resultadoPendente.dt_entrega}` : null,
       lucro_tri_var: lucroTriVar,
       aliquota_tri: aliquotaTri, aliquota_media: aliquotaMedia,
@@ -557,10 +564,11 @@ function ajustarPeloFre(linha, regs, fre, serieRef) {
 
 // Percentil (0 a 100) de cada valor dentro do grupo. maiorMelhor=false inverte.
 function percentis(grupo, campo, maiorMelhor = true) {
-  const vals = grupo.map(f => f[campo]).filter(Number.isFinite).sort((a, b) => a - b);
+  const valor = typeof campo === 'function' ? campo : f => f[campo];
+  const vals = grupo.map(valor).filter(Number.isFinite).sort((a, b) => a - b);
   const pct = new Map();
   for (const f of grupo) {
-    const v = f[campo];
+    const v = valor(f);
     if (!Number.isFinite(v) || vals.length < 2) continue;
     let lo = 0, hi = vals.length;
     while (lo < hi) { const m = (lo + hi) >> 1; if (vals[m] < v) lo = m + 1; else hi = m; }
@@ -573,22 +581,32 @@ function percentis(grupo, campo, maiorMelhor = true) {
 // Notas de 0 a 100 em cada pilar, relativas às outras empresas do mesmo grupo
 function pontuar(grupo, financeiras) {
   if (!grupo.length) return;
+  // Com lucro suspeito, as medidas que dependem do lucro (ROE, lucro/preço, margem, crescimento do lucro) entram
+  // nas notas recalculadas pelo lucro normalizado; sem base para normalizar, ficam de fora
+  const fatorLucro = f => !f.lucro_suspeito ? 1 : f.lucro_normalizado != null && f.lucro_12m > 0 ? f.lucro_normalizado / f.lucro_12m : null;
+  const peloLucro = campo => f => { const k = fatorLucro(f); return k == null || f[campo] == null ? null : f[campo] * k; };
+  const cagrNota = f => {
+    const k = fatorLucro(f);
+    return k == null || f.cagr_lucro_5a == null ? null : k === 1 ? f.cagr_lucro_5a : k > 0 ? (1 + f.cagr_lucro_5a) * k ** (1 / 5) - 1 : null;
+  };
   const P = {};
-  for (const [campo, maior] of [['roe', 1], ['roic', 1], ['earnings_yield', 1], ['ebit_ev', 1], ['pvp', 0],
-    ['div_liq_ebitda', 0], ['liq_corrente', 1], ['div_liq_pl', 0], ['cagr_receita_5a', 1], ['cagr_lucro_5a', 1]]) {
-    P[campo] = percentis(grupo, campo, !!maior);
+  for (const [campo, maior, valor] of [['roe', 1, peloLucro('roe')], ['roic', 1], ['earnings_yield', 1, peloLucro('earnings_yield')], ['ebit_ev', 1], ['pvp', 0],
+    ['div_liq_ebitda', 0], ['liq_corrente', 1], ['div_liq_pl', 0], ['cagr_receita_5a', 1], ['cagr_lucro_5a', 1, cagrNota]]) {
+    P[campo] = percentis(grupo, valor ?? campo, !!maior);
   }
   // Margem é comparada dentro do setor: varejo e software não têm a mesma margem "normal"
   const porSetor = Map.groupBy(grupo, f => f.setor);
   const margemSetor = new Map();
+  const margem = peloLucro('margem_liq');
   for (const membros of porSetor.values()) {
-    const p = membros.length >= 4 ? percentis(membros, 'margem_liq') : percentis(grupo, 'margem_liq');
+    const p = membros.length >= 4 ? percentis(membros, margem) : percentis(grupo, margem);
     for (const f of membros) margemSetor.set(f, p(f));
   }
 
   for (const f of grupo) {
     const consistencia = f.anos_lucro_base ? 100 * f.anos_lucro / f.anos_lucro_base : null;
-    const pctHist = f.pl_percentil ?? f.ev_ebit_percentil;
+    // P/L contra o histórico também usa o lucro inflado: com lucro suspeito vale só o EV/EBIT (operacional)
+    const pctHist = f.lucro_suspeito ? f.ev_ebit_percentil : f.pl_percentil ?? f.ev_ebit_percentil;
     const baratoVsHistorico = pctHist != null ? 100 - pctHist : null;
     f.nota_qualidade = media(financeiras
       ? [P.roe(f), consistencia]
