@@ -1062,6 +1062,7 @@ function gatilhoAcao(tk, e, p) {
   if (pendente) tese.push(pendente);
   if (motivos.includes('lucro do último trimestre caiu')) tese.push(`lucro do último trimestre ${pctSinal(e.lucro_tri_var, 0)} contra um ano antes: os 12 meses ainda não mostram toda a piora`);
   if (motivos.includes('dividendo extraordinário')) tese.push(`dividendo de 12 meses (${pct(e.dy, 0)}) bem acima do normal (${pct(e.dy_mediana, 0)}): inclui pagamento extraordinário, não conte com ele`);
+  if (motivos.includes('efeito fiscal no lucro')) tese.push(`lucro do último trimestre inflado por imposto baixo (alíquota ${pct(e.aliquota_tri, 0)} contra ${pct(e.aliquota_media, 0)} normal): o recorrente é menor`);
   if (motivos.includes('queda forte do preço')) tese.push(`caiu ${pct(-e.queda_3m, 0)} em 3 meses (Ibovespa ${pctSinal(e.queda_3m_ibov, 0)}): o mercado pode estar antecipando lucro menor`);
   const conferirAntes = !!pendente || motivos.some(m => m !== 'dividendo extraordinário');
   const quebrada = tese.some(t => t.startsWith('ROE') || t.startsWith('dividendo caiu'));
@@ -1282,7 +1283,12 @@ function blocoUltimoResultado(e) {
   const recente = u[3] && (Date.parse(hojeIso()) - Date.parse(u[3])) / 864e5 <= 10;
   return `<div class="grafico-bloco ultimo-resultado${recente ? ' recente' : ''}" style="margin-bottom:12px">
     <div class="mapa-topo"><div><h3>Resultado do ${rotuloTrimestre(u[0])}${recente ? ' <span class="selo">novo</span>' : ''}</h3>
-      <div class="tile-sub">Entregue à CVM em ${data(u[3] ?? '')} · números do próprio balanço (ITR), trimestre isolado</div></div></div>
+      <div class="tile-sub">${u[4] === 'enet'
+        ? `Lido do ITR entregue à CVM em ${data(u[3] ?? '')}: lucro <b>contábil e preliminar</b>; o recorrente divulgado pela empresa pode ser diferente`
+        : `Balanço entregue à CVM em ${data(u[3] ?? '')}: lucro contábil, trimestre isolado`}</div></div></div>
+    ${(e.conferir ?? '').includes('efeito fiscal no lucro') ? `<p class="tile-sub aviso-fiscal">${ICONE_ALERTA.replace('icone-alerta', 'icone-alerta icone-mini')}
+      Imposto do trimestre muito abaixo do normal (alíquota de ${pct(e.aliquota_tri, 0)} contra ${pct(e.aliquota_media, 0)} em média): parte do lucro é efeito fiscal que não se repete.
+      O P/L e o lucro de 12 meses ficam melhores do que o resultado recorrente.</p>` : ''}
     <div class="ativo-numeros ativo-numeros-p" style="margin:8px 0 0">
       <div><span>Lucro do trimestre</span><b>${dinheiro(u[1])}</b><small>${[lucroA, lucroT].filter(Boolean).join(' · ') || '–'}</small></div>
       ${ok(u[2]) && u[2] > 0 ? `<div><span>Receita do trimestre</span><b>${dinheiro(u[2])}</b><small>${receitaA || '–'}</small></div>` : ''}

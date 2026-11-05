@@ -529,3 +529,6 @@ td.melhor::before { content: "● "; color: var(--destaque); font-size: .7em; ve
 /* Último resultado trimestral no Resumo da página do ativo */
 .ultimo-resultado .ativo-numeros small { display: block; font-size: .74rem; line-height: 1.35; }
 .ultimo-resultado.recente { border-color: color-mix(in srgb, var(--destaque) 45%, var(--linha)); }
+
+/* Aviso de efeito fiscal no quadro do último resultado */
+.aviso-fiscal { display: flex; gap: 6px; align-items: flex-start; margin: 8px 0 0; color: var(--texto-2); }

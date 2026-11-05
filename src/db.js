@@ -118,6 +118,14 @@ export function abrirDb() {
   const colunas = db.prepare('PRAGMA table_info(fundamentos)').all().map(c => c.name);
   if (!colunas.includes('equivalencia')) db.exec('ALTER TABLE fundamentos ADD COLUMN equivalencia REAL');
   if (!colunas.includes('acoes_on_bruto')) db.exec('ALTER TABLE fundamentos ADD COLUMN acoes_on_bruto REAL; ALTER TABLE fundamentos ADD COLUMN acoes_pn_bruto REAL');
+  // Resultado antes dos tributos e IR/CSLL (alíquota efetiva: detecta lucro inflado por efeito fiscal) e a
+  // origem do número ("enet" = lido do ITR no dia da entrega). Os DFP/ITR dos últimos dois anos são
+  // marcados para reprocessar, para a alíquota ter histórico de comparação.
+  if (!colunas.includes('ebt')) {
+    db.exec('ALTER TABLE fundamentos ADD COLUMN ebt REAL; ALTER TABLE fundamentos ADD COLUMN ir REAL; ALTER TABLE fundamentos ADD COLUMN fonte TEXT');
+    const ano = new Date().getFullYear();
+    for (const a of [ano - 1, ano]) db.prepare("DELETE FROM arquivos WHERE url LIKE ? OR url LIKE ?").run(`%dfp_cia_aberta_${a}.zip`, `%itr_cia_aberta_${a}.zip`);
+  }
   const colTesouro = db.prepare('PRAGMA table_info(tesouro)').all().map(c => c.name);
   if (!colTesouro.includes('pu')) db.exec('ALTER TABLE tesouro ADD COLUMN pu REAL');
   const colCotacoes = db.prepare('PRAGMA table_info(cotacoes)').all().map(c => c.name);

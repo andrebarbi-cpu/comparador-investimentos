@@ -308,13 +308,30 @@ export function calcular(db) {
     }
     // 2) Lucro do último trimestre muito abaixo do mesmo trimestre do ano anterior: os 12 meses ainda
     //    escondem a piora
-    const lucroTri = r => {
-      if (!r || r.lucro_contr == null) return null;
+    // Valor do trimestre isolado: os balanços trazem o acumulado do ano
+    const isolado = (r, campo) => {
+      if (!r || r[campo] == null) return null;
       const mes = r.dt_refer.slice(5, 7);
-      if (mes === '03') return r.lucro_contr;
+      if (mes === '03') return r[campo];
       const ant = porRef.get(`${r.dt_refer.slice(0, 4)}-${{ '06': '03-31', '09': '06-30', '12': '09-30' }[mes]}`);
-      return ant?.lucro_contr != null && ant.dt_ini === r.dt_ini ? r.lucro_contr - ant.lucro_contr : null;
+      return ant?.[campo] != null && ant.dt_ini === r.dt_ini ? r[campo] - ant[campo] : null;
     };
+    const lucroTri = r => isolado(r, 'lucro_contr');
+    // 5) Efeito fiscal não recorrente: alíquota efetiva (IR/CSLL ÷ resultado antes dos tributos) do
+    //    trimestre muito abaixo da média dos 4 anteriores, ou crédito de imposto. Caso Porto 3T26: 3%
+    //    contra ~25% (reversão de impostos diferidos); o lucro contábil sobe e o P/L parece menor.
+    const aliquota = r => { const e = isolado(r, 'ebt'), i = isolado(r, 'ir'); return e > 0 && i != null ? -i / e : null; };
+    const refsAnteriores = [...porRef.keys()].filter(k => k < b.dt_refer).sort().slice(-4);
+    const aliquotasAntes = refsAnteriores.map(k => aliquota(porRef.get(k))).filter(x => x != null && x >= 0 && x < 0.6);
+    const aliquotaTri = aliquota(b), aliquotaMedia = aliquotasAntes.length >= 2 ? media(aliquotasAntes) : null;
+    const efeitoFiscal = aliquotaTri != null && aliquotaMedia != null && (aliquotaTri < 0 || aliquotaMedia - aliquotaTri > 0.10);
+    if (efeitoFiscal) {
+      const ebtTri = isolado(b, 'ebt'), lucroTriAtual = lucroTri(b);
+      // Lucro do trimestre se o imposto tivesse a alíquota média (aproximado, sem separar minoritários)
+      const normalizado = ebtTri > 0 ? ebtTri * (1 - aliquotaMedia) : null;
+      alertas.push(`Lucro do ${rotuloTri(b.dt_refer)} com efeito fiscal não recorrente: alíquota efetiva de ${br(100 * aliquotaTri, 0)}% contra ${br(100 * aliquotaMedia, 0)}% em média nos trimestres anteriores`
+        + (normalizado != null && lucroTriAtual != null ? `; com a alíquota média, o lucro do trimestre seria cerca de R$ ${br(normalizado / 1e6, 0)} mi, e não R$ ${br(lucroTriAtual / 1e6, 0)} mi. O P/L fica mais baixo do que o lucro recorrente justifica` : ''));
+    }
     const triAtual = lucroTri(b), triAnoAntes = lucroTri(porRef.get(menosAnos(b.dt_refer, 1)));
     const lucroTriVar = triAtual != null && triAnoAntes > 0 ? triAtual / triAnoAntes - 1 : null;
     if (lucroTriVar != null && lucroTriVar < -0.3) {
@@ -379,8 +396,10 @@ export function calcular(db) {
       lucro_suspeito: lucroSuspeito ? 1 : 0,
       resultado_pendente: resultadoPendente ? `${rotuloTri(resultadoPendente.dt_refer)}|${resultadoPendente.dt_entrega}` : null,
       lucro_tri_var: lucroTriVar,
+      aliquota_tri: aliquotaTri, aliquota_media: aliquotaMedia,
       // Motivos para conferir antes de confiar no "barata": a página troca "lucro intacto" por "conferir"
       conferir: [resultadoPendente && 'resultado novo fora da base', lucroTriVar != null && lucroTriVar < -0.3 && 'lucro do último trimestre caiu',
+        efeitoFiscal && 'efeito fiscal no lucro',
         dividendoExtra && 'dividendo extraordinário', quedaForte && 'queda forte do preço'].filter(Boolean).join(' | ') || null,
       queda_3m: quedaAcao, queda_3m_ibov: quedaIbov,
       elegivel: liquidez >= LIQUIDEZ_MINIMA && !desatualizado && t.lucro_contr != null ? 1 : 0,

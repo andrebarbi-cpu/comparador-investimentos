@@ -74,14 +74,15 @@ export async function atualizarItrDoDia(db) {
     FROM entregas n JOIN empresas e ON CAST(e.cd_cvm AS INTEGER) = CAST(n.cd_cvm AS INTEGER)
     WHERE n.tipo = 'ITR' AND n.seq IS NOT NULL AND n.dt_entrega >= date('now', '-60 day')
       AND e.cnpj IN (SELECT DISTINCT cnpj FROM tickers WHERE tipo = 'acao')
-      AND NOT EXISTS (SELECT 1 FROM fundamentos f WHERE f.cnpj = e.cnpj AND f.dt_refer = n.dt_refer)
+      -- Falta na base, ou entrou antes de existirem as colunas de imposto (sem ebt e sem origem marcada)
+      AND NOT EXISTS (SELECT 1 FROM fundamentos f WHERE f.cnpj = e.cnpj AND f.dt_refer = n.dt_refer AND (f.ebt IS NOT NULL OR f.fonte = 'enet'))
     ORDER BY n.dt_entrega DESC LIMIT 60`).all();
   if (!pendentes.length) { log('ITR do dia: nada novo para ler'); return; }
-  const ins = db.prepare(`INSERT OR IGNORE INTO fundamentos (cnpj, dt_refer, tipo, dt_ini, dt_receb, versao,
+  const ins = db.prepare(`INSERT OR REPLACE INTO fundamentos (cnpj, dt_refer, tipo, dt_ini, dt_receb, versao,
     consolidado, receita, lucro_bruto, ebit, equivalencia, da, lucro_liq, lucro_contr, fco, fci, fcf, capex, dividendos_pagos,
     ativo_total, ativo_circ, caixa, passivo_circ, divida_cp, divida_lp, pl, pl_contr, acoes_on, acoes_pn,
-    acoes_on_bruto, acoes_pn_bruto)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    acoes_on_bruto, acoes_pn_bruto, ebt, ir, fonte)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'enet')`);
   const pasta = join(BRUTOS, 'enet');
   mkdirSync(pasta, { recursive: true });
   let lidos = 0;
@@ -114,7 +115,7 @@ export async function atualizarItrDoDia(db) {
       transacao(db, () => ins.run(doc.cnpj, doc.dt_refer, 'ITR', f.dt_ini, p.dt_entrega, doc.versao, doc.consolidado,
         f.receita, f.lucro_bruto, f.ebit, f.equivalencia, f.da, f.lucro_liq, f.lucro_contr, f.fco, f.fci, f.fcf, f.capex,
         f.dividendos_pagos, f.ativo_total, f.ativo_circ, f.caixa, f.passivo_circ, f.divida_cp, f.divida_lp,
-        f.pl, f.pl_contr, doc.acoes?.on ?? null, doc.acoes?.pn ?? null, doc.acoes?.brutoOn ?? null, doc.acoes?.brutoPn ?? null));
+        f.pl, f.pl_contr, doc.acoes?.on ?? null, doc.acoes?.pn ?? null, doc.acoes?.brutoOn ?? null, doc.acoes?.brutoPn ?? null, f.ebt, f.ir));
       lidos++;
     } catch (e) { falhas.push(`${p.nome}: ${e.message}`); }
   }

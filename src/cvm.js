@@ -185,8 +185,8 @@ export async function atualizarDemonstracoes(db, tipo, ano, { soSeMudou = false 
   const ins = db.prepare(`INSERT OR REPLACE INTO fundamentos (cnpj, dt_refer, tipo, dt_ini, dt_receb, versao,
     consolidado, receita, lucro_bruto, ebit, equivalencia, da, lucro_liq, lucro_contr, fco, fci, fcf, capex, dividendos_pagos,
     ativo_total, ativo_circ, caixa, passivo_circ, divida_cp, divida_lp, pl, pl_contr, acoes_on, acoes_pn,
-    acoes_on_bruto, acoes_pn_bruto)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    acoes_on_bruto, acoes_pn_bruto, ebt, ir, fonte)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)`);
   let gravados = 0;
   transacao(db, () => {
     for (const rec of recs.values()) {
@@ -200,7 +200,7 @@ export async function atualizarDemonstracoes(db, tipo, ano, { soSeMudou = false 
         f.receita, f.lucro_bruto, f.ebit, f.equivalencia, f.da, f.lucro_liq, f.lucro_contr, f.fco, f.fci, f.fcf, f.capex,
         f.dividendos_pagos, f.ativo_total, f.ativo_circ, f.caixa, f.passivo_circ, f.divida_cp, f.divida_lp,
         f.pl, f.pl_contr, rec.acoes?.on ?? null, rec.acoes?.pn ?? null,
-        rec.acoes?.brutoOn ?? null, rec.acoes?.brutoPn ?? null);
+        rec.acoes?.brutoOn ?? null, rec.acoes?.brutoPn ?? null, f.ebt, f.ir);
       gravados++;
     }
   });
@@ -276,5 +276,9 @@ export function extrairCampos(c, outro) {
     divida_lp: v('BPP', '2.02.01', /empr[ée]stimo|financiamento/i),
     pl: contaPl?.vl ?? null,
     pl_contr: contaPl ? contaPl.vl - (minoritarios?.vl ?? 0) : null,
+    // Resultado antes dos tributos e IR/CSLL (negativo = despesa): a alíquota efetiva mostra lucro
+    // inflado por crédito fiscal, como a reversão de impostos diferidos da Porto no 3T26
+    ebt: filhos('DRE', '3').find(x => /antes d[oa]s? (tributos|imposto|tributa)/i.test(x.ds))?.vl ?? null,
+    ir: filhos('DRE', '3').find(x => /(imposto de renda|tributos sobre o lucro)/i.test(x.ds) && !/antes/i.test(x.ds))?.vl ?? null,
   };
 }

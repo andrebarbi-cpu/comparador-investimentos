@@ -98,13 +98,13 @@ export function exportar(db) {
   // trimestre = acumulado até ele - acumulado até o anterior do mesmo exercício
   const trimestres = {};
   let ant = null;
-  for (const r of db.prepare(`SELECT cnpj, dt_refer, dt_ini, dt_receb, lucro_contr, receita FROM fundamentos
+  for (const r of db.prepare(`SELECT cnpj, dt_refer, dt_ini, dt_receb, lucro_contr, receita, fonte FROM fundamentos
       WHERE dt_refer >= '2023-01-01' AND cnpj IN (SELECT cnpj FROM indicadores) ORDER BY cnpj, dt_refer`).iterate()) {
     const mesmoAno = ant && ant.cnpj === r.cnpj && ant.dt_ini === r.dt_ini;
     const base = mesmoAno ? ant : { lucro_contr: 0, receita: 0 };
     if (r.dt_ini && r.lucro_contr != null) {
       (trimestres[r.cnpj] ??= []).push([r.dt_refer, arred(r.lucro_contr - (base.lucro_contr ?? 0)),
-        arred(r.receita != null ? r.receita - (base.receita ?? 0) : null), r.dt_receb]);
+        arred(r.receita != null ? r.receita - (base.receita ?? 0) : null), r.dt_receb, r.fonte ?? null]);
     }
     ant = r;
   }
