@@ -83,6 +83,68 @@ export function abrirZip(caminho) {
   };
 }
 
+// Zip remoto lido aos pedaços (HTTP Range): baixa só o índice e o arquivo pedido. A base da Susep tem
+// 577 MB e a da Anatel 3,2 GB, mas o que interessa delas são poucos MB.
+export async function abrirZipRemoto(url) {
+  const UA = { 'user-agent': 'Mozilla/5.0' };
+  const pedaco = async (ini, fim) => {
+    for (let i = 1; i <= 3; i++) {
+      try {
+        const r = await fetch(url, { headers: { ...UA, range: `bytes=${ini}-${fim}` }, signal: AbortSignal.timeout(5 * 60000) });
+        if (r.status !== 206) throw new Error(`HTTP ${r.status} (o servidor não aceitou leitura parcial)`);
+        return Buffer.from(await r.arrayBuffer());
+      } catch (e) {
+        if (i === 3) throw new Error(`Falha ao ler ${url}: ${e.message}`);
+        await new Promise(res => setTimeout(res, 3000 * i));
+      }
+    }
+  };
+  const cab = await fetch(url, { method: 'HEAD', headers: UA, signal: AbortSignal.timeout(60000) });
+  if (!cab.ok) throw new Error(`HTTP ${cab.status} ao consultar ${url}`);
+  const tam = Number(cab.headers.get('content-length'));
+  const cauda = await pedaco(Math.max(0, tam - 65557), tam - 1);
+  let p = cauda.length - 22;
+  while (p >= 0 && cauda.readUInt32LE(p) !== 0x06054b50) p--;
+  if (p < 0) throw new Error(`Zip inválido: ${url}`);
+  let n = cauda.readUInt16LE(p + 10), cdTam = cauda.readUInt32LE(p + 12), cdIni = cauda.readUInt32LE(p + 16);
+  if (cdIni === 0xffffffff || n === 0xffff) { // ZIP64 (arquivos acima de 4 GB ou muitos membros)
+    const z64 = Number(cauda.readBigUInt64LE(p - 20 + 8));
+    const reg = await pedaco(z64, z64 + 55);
+    n = Number(reg.readBigUInt64LE(32)); cdTam = Number(reg.readBigUInt64LE(40)); cdIni = Number(reg.readBigUInt64LE(48));
+  }
+  const cd = await pedaco(cdIni, cdIni + cdTam - 1);
+  const membros = new Map();
+  for (let i = 0, q = 0; i < n; i++) {
+    const metodo = cd.readUInt16LE(q + 10);
+    let comp = cd.readUInt32LE(q + 20), orig = cd.readUInt32LE(q + 24), local = cd.readUInt32LE(q + 42);
+    const nl = cd.readUInt16LE(q + 28), xl = cd.readUInt16LE(q + 30), cl = cd.readUInt16LE(q + 32);
+    for (let x = q + 46 + nl; x < q + 46 + nl + xl;) { // campo extra ZIP64 com os tamanhos de 64 bits
+      const id = cd.readUInt16LE(x), sz = cd.readUInt16LE(x + 2);
+      if (id === 1) {
+        let k = x + 4;
+        if (orig === 0xffffffff) { orig = Number(cd.readBigUInt64LE(k)); k += 8; }
+        if (comp === 0xffffffff) { comp = Number(cd.readBigUInt64LE(k)); k += 8; }
+        if (local === 0xffffffff) local = Number(cd.readBigUInt64LE(k));
+      }
+      x += 4 + sz;
+    }
+    membros.set(cd.toString('latin1', q + 46, q + 46 + nl), { metodo, comp, orig, local });
+    q += 46 + nl + xl + cl;
+  }
+  return {
+    nomes: [...membros.keys()],
+    // Conteúdo de um membro como texto latin1 (só os bytes dele são baixados)
+    async texto(nome, codificacao = 'latin1') {
+      const m = membros.get(nome);
+      if (!m) return null;
+      const loc = await pedaco(m.local, m.local + 29);
+      const ini = m.local + 30 + loc.readUInt16LE(26) + loc.readUInt16LE(28);
+      const bruto = await pedaco(ini, ini + m.comp - 1);
+      return (m.metodo === 0 ? bruto : inflateRawSync(bruto)).toString(codificacao);
+    },
+  };
+}
+
 // Divide uma linha de CSV com ';', respeitando aspas quando houver.
 export function dividirCsv(linha) {
   if (linha.endsWith('\r')) linha = linha.slice(0, -1);

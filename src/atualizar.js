@@ -12,6 +12,7 @@ import { atualizarIntraday } from './intraday.js';
 import { atualizarEtfsExternos } from './externos.js';
 import { atualizarProventos } from './proventos.js';
 import { atualizarEntregas } from './entregas.js';
+import { atualizarTermometro } from './termometro.js';
 import { log, anoAtual } from './util.js';
 
 const ANO_INICIO = 2016;
@@ -59,6 +60,8 @@ if (intraday) {
   await etapa('Banco Central', () => atualizarBcb(db, ANO_INICIO));
   await etapa('Tesouro', () => atualizarTesouro(db, ANO_INICIO));
   await etapa('entregas de resultados à CVM', () => atualizarEntregas(db));
+  // Susep, Anatel e ONS: dados do setor que saem antes do balanço (só baixa o que mudou)
+  await etapa('termômetro do trimestre', () => atualizarTermometro(db));
   // Pregão em andamento: junta os preços parciais do dia (fora do pregão não grava nada). Sem isso,
   // uma atualização completa rodada à tarde publicaria o site com os preços de ontem.
   // Falha aqui não deixa a execução vermelha: o preço oficial já foi atualizado acima.

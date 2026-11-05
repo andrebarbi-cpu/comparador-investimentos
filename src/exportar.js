@@ -2,6 +2,7 @@
 // Um .js em vez de .json para a página abrir direto do disco, sem servidor.
 import { writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { criarTabelasProventos, classeTicker, fatorAte } from './proventos.js';
+import { montarTermometro } from './termometro.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { abrirDb } from './db.js';
@@ -140,6 +141,8 @@ export function exportar(db) {
     precos_parciais: temParcial ? { hora: horaParcial } : null,
     macro, tesouro, empresas, historico, anuais, etfs, series,
     config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario, trimestres, tickers, oficial,
+    // Susep, Anatel e ONS: sinais do trimestre em curso e séries de 25 meses (src/termometro.js)
+    termometro: montarTermometro(db),
   };
   mkdirSync(join(RAIZ, 'site'), { recursive: true });
   const texto = `window.DADOS = ${JSON.stringify(dados)};\n`;

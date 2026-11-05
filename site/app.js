@@ -287,6 +287,7 @@ function montarInicio(el) {
       <div class="grafico-bloco"><h3>Resultados da semana</h3><div class="tile-sub">Temporada ${esc(AGENDA.trimestre ?? '')} · empresas da carteira e acompanhadas</div>
         <div class="atencao">${agendaSemana() || '<p class="vazio">Nenhum resultado nos próximos dias.</p>'}</div></div>
     </div>
+    ${blocoTermometroInicio(c)}
     <div class="grafico-bloco" style="margin-top:12px">
       <div class="mapa-topo"><div><h3>Mapa do dia</h3><div class="tile-sub" id="mapa-legenda"></div></div>
         <span class="segmentado" role="group" aria-label="O que mostrar no mapa">
@@ -1232,6 +1233,98 @@ function desenharRanking() {
 // Página própria de cada ação, no formato das plataformas de análise: cabeçalho com preço e números-chave,
 // menu de seções e, numa página só, cotação, indicadores (com explicação), dividendos, dados contábeis,
 // comparação com o setor e simulador. Cotação diária e proventos vêm de ativos/TICKER.json, lido na hora.
+// ---------- Termômetro do trimestre ----------
+// Dados públicos do setor que saem antes do balanço (src/termometro.js): Susep para seguradoras,
+// Anatel para operadoras, ONS para elétricas. Mostram a direção do próximo resultado, não o número.
+const TERMO = D.termometro;
+const ehEletrica = e => /energia el[ée]trica/i.test(e?.setor ?? '');
+function chaveTermometro(e, tk) {
+  if (!TERMO || !e) return null;
+  for (const t of [tk, ...e.tickers.split(' ')]) {
+    const k = t && TERMO.porCodigo?.[t.slice(0, 4)];
+    if (k && TERMO.sinais[k]) return k;
+  }
+  return ehEletrica(e) && TERMO.sinais[TERMO.energia] ? TERMO.energia : null;
+}
+const valorTermo = i => i.formato === 'dinheiro' ? dinheiro(i.valor) : i.formato === 'pct' ? pct(i.valor)
+  : i.formato === 'milhoes' ? `${num(i.valor / 1e6, 1)} mi` : i.formato === 'mwmed' ? `${num(i.valor / 1000, 1)} mil MWmed` : num(i.valor);
+const comparacaoTermo = i => i.variacao != null ? `${pctSinal(i.variacao)} contra um ano antes`
+  : i.pp != null ? `${i.pp >= 0 ? '+' : '−'}${num(Math.abs(i.pp) * 100, 1)} p.p. contra um ano antes (era ${pct(i.antes)})` : '';
+const setaTermo = d => d > 0 ? '<span class="termo-seta melhora">▲ melhora</span>' : d < 0 ? '<span class="termo-seta piora">▼ piora</span>'
+  : '<span class="termo-seta">● estável</span>';
+// Resumo do sinal: melhora, piora, misto (uma de cada) ou estável
+function resumoTermo(sinal) {
+  const sobe = sinal.itens.some(i => i.dir > 0), desce = sinal.itens.some(i => i.dir < 0);
+  return sobe && desce ? 'misto' : sobe ? 'melhora' : desce ? 'piora' : 'estável';
+}
+const etiquetaTermo = r => ({ melhora: 'etiqueta-compra', piora: 'etiqueta-venda', misto: 'etiqueta-conferir' }[r] ?? '');
+// Transmissoras listadas (prefixo do código): receita anual permitida fixa, corrigida pela inflação
+const TRANSMISSORAS = new Set(['ALUP', 'TAEE', 'ISAE', 'TRPL']);
+const NOTA_ELETRICA = 'O consumo pesa no resultado de distribuidoras e geradoras. Transmissoras (Alupar, Taesa, ISA) recebem uma receita fixa por contrato e quase não sentem.';
+
+// Seção da página do ativo (vazia quando a empresa não tem dado do setor)
+function secaoTermometro(e, tk) {
+  const k = chaveTermometro(e, tk);
+  if (!k) return '';
+  const s = TERMO.sinais[k];
+  return `<section class="ativo-secao" id="s-termometro"><h3 class="secao">Termômetro do trimestre</h3>
+    <p class="tile-sub" style="margin:0 0 8px">Dados públicos do setor que saem antes do balanço: <b>${esc(s.fonte)}</b>, ${esc(s.nome)}, ${esc(s.periodo)}.
+      Mostram a direção do próximo resultado, não o número exato. ${k === TERMO.energia ? esc(NOTA_ELETRICA) : ''}</p>
+    <div class="blocos">${s.itens.map(i => `<div class="bloco"><h3>${esc(i.rotulo)}</h3><div class="tile-valor">${valorTermo(i)}</div>
+      <div class="tile-sub">${comparacaoTermo(i)}</div><div class="termo-linha">${setaTermo(i.dir)}<span class="tile-sub">${esc(i.texto)}</span></div></div>`).join('')}</div>
+    <div class="graficos"><div class="grafico-bloco"><h3 id="g-termo-1-t"></h3><div class="tile-sub" id="g-termo-1-s"></div><div class="grafico" id="g-termo-1"></div></div>
+      <div class="grafico-bloco"><h3 id="g-termo-2-t"></h3><div class="tile-sub" id="g-termo-2-s"></div><div class="grafico" id="g-termo-2"></div></div></div>
+  </section>`;
+}
+function desenharTermometro(e, tk) {
+  const k = chaveTermometro(e, tk);
+  if (!k || !$('#g-termo-1')) return;
+  const g = TERMO.graficos[k];
+  const titulo = (n, t, sub) => { $(`#g-termo-${n}-t`).textContent = t; $(`#g-termo-${n}-s`).textContent = sub; };
+  const pares = arr => g.meses.map((m, i) => [m, arr[i]]);
+  if (k.startsWith('susep:')) {
+    titulo(1, 'Prêmio ganho por mês', 'Receita de seguros do grupo, em reais');
+    // Rótulo curto (ago/26): 25 colunas não cabem com o ano inteiro
+    graficoColunas($('#g-termo-1'), { pontos: g.meses.map((m, i) => [mesAno(m).replace(/\/20(\d\d)$/, '/$1'), g.premio[i]]), fmt: dinheiro });
+    titulo(2, 'Sinistralidade por mês', 'Sinistros ÷ prêmio ganho; quanto menor, melhor');
+    graficoLinhas($('#g-termo-2'), { series: [{ nome: 'Sinistralidade', cor: 'var(--serie-2)', pontos: pares(g.sinistralidade) }], fmt: v => pct(v), fmtEixo: v => pct(v, 0) });
+  } else if (k.startsWith('anatel:')) {
+    titulo(1, 'Linhas pós-pago', 'Clientes de conta, sem chips de máquinas (M2M)');
+    graficoLinhas($('#g-termo-1'), { series: [{ nome: 'Pós-pago', cor: 'var(--serie-1)', pontos: pares(g.pos) }], fmt: v => `${num(v / 1e6, 2)} mi`, fmtEixo: v => `${num(v / 1e6, 0)} mi` });
+    titulo(2, 'Participação no pós-pago', 'Fatia das linhas pós-pago do país');
+    graficoLinhas($('#g-termo-2'), { series: [{ nome: 'Participação', cor: 'var(--serie-3)', pontos: pares(g.share) }], fmt: v => pct(v), fmtEixo: v => pct(v, 0) });
+  } else {
+    titulo(1, 'Consumo de energia no Brasil', 'Carga média mensal do sistema interligado (MW médios)');
+    graficoLinhas($('#g-termo-1'), { series: [{ nome: 'Brasil', cor: 'var(--serie-1)', pontos: pares(g.sin) }], fmt: v => `${num(v, 0)} MWmed` });
+    titulo(2, 'Consumo no Sudeste/Centro-Oeste', 'Região da CPFL e da maior parte das distribuidoras listadas');
+    graficoLinhas($('#g-termo-2'), { series: [{ nome: 'Sudeste/Centro-Oeste', cor: 'var(--serie-3)', pontos: pares(g.se) }], fmt: v => `${num(v, 0)} MWmed` });
+  }
+}
+
+// Bloco do Início: o sinal de cada ação da carteira que tem dado do setor (elétricas dividem o da ONS)
+function blocoTermometroInicio(c) {
+  if (!TERMO || !c) return '';
+  const itens = [];
+  for (const tk of c.acoes ?? []) {
+    const e = porTicker.get(tk), k = chaveTermometro(e, tk);
+    if (!k) continue;
+    const s = TERMO.sinais[k];
+    // Transmissora tem receita fixa por contrato: o consumo de energia quase não mexe no resultado
+    const transmissora = k === TERMO.energia && TRANSMISSORAS.has(tk.slice(0, 4));
+    const r = transmissora ? 'pouco efeito' : resumoTermo(s);
+    // Todos os indicadores, menos o pré-pago (contexto do setor inteiro); valores sem o "contra um ano antes"
+    const detalhe = transmissora ? 'transmissora: receita fixa por contrato, o consumo pesa pouco'
+      : s.itens.filter(i => i.rotulo !== 'Linhas pré-pago')
+        .map(i => `${i.rotulo.replace('Consumo de energia: ', 'consumo ')} ${comparacaoTermo(i).replace(' contra um ano antes', '')}`).join(' · ');
+    itens.push(`<button class="atencao-item" data-ir="empresa/${esc(tk)}"><span class="atencao-txt"><b>${esc(tk)} · ${esc(s.fonte)} (${esc(s.periodo)})</b>
+      <span>${esc(detalhe)}</span></span><span class="etiqueta ${etiquetaTermo(r)}">${r[0].toUpperCase() + r.slice(1)}</span></button>`);
+  }
+  if (!itens.length) return '';
+  return `<div class="grafico-bloco" style="margin-top:12px"><h3>Termômetro do trimestre</h3>
+    <div class="tile-sub">Dados do setor que saem antes do balanço (Susep, Anatel, ONS), contra o mesmo período do ano anterior</div>
+    <div class="atencao">${itens.join('')}</div></div>`;
+}
+
 const SECOES_ATIVO = [['resumo', 'Resumo'], ['cotacao', 'Cotação'], ['indicadores', 'Indicadores'], ['dividendos', 'Dividendos'],
   ['contabil', 'Contábil'], ['setor', 'Setor'], ['simulador', 'Simulador']];
 let voltarPara = 'inicio';
@@ -1310,7 +1403,7 @@ function montarAtivo(el, ticker) {
     </div>
     <div class="ativo-numeros">${numeros([['Valor de mercado', dinheiro(e.vm)], ['P/L', num(e.pl)], ['P/VP', num(e.pvp, 2)], ['Dividendos 12m', pct(e.dy)],
       ['ROE', pct(e.roe)], ['Nota geral', ok(e.nota_geral) ? `${e.nota_geral}<small>/100</small>` : '–'], ['Liquidez/dia', dinheiro(e.liquidez)]])}</div>
-    <nav class="ativo-secoes" aria-label="Seções do ativo">${SECOES_ATIVO.map(([k, r]) => `<a href="#" data-secao="${k}">${r}</a>`).join('')}
+    <nav class="ativo-secoes" aria-label="Seções do ativo">${SECOES_ATIVO.flatMap(x => (x[0] === 'setor' && chaveTermometro(e, ticker) ? [['termometro', 'Termômetro'], x] : [x])).map(([k, r]) => `<a href="#" data-secao="${k}">${r}</a>`).join('')}
       <a class="botao botao-principal" href="#comparar/${encodeURIComponent(ticker)}">Comparar</a></nav>
 
     <section class="ativo-secao" id="s-resumo"><h3 class="secao">Resumo</h3>
@@ -1420,6 +1513,8 @@ function montarAtivo(el, ticker) {
       ${e.acoes_fre ? `<p class="tile-sub">${esc(e.acoes_fre)}. O valor de mercado e os múltiplos já usam a quantidade nova.</p>` : ''}
     </section>
 
+    ${secaoTermometro(e, ticker)}
+
     <section class="ativo-secao" id="s-setor"><h3 class="secao">Comparado ao setor</h3>
       <p class="tile-sub" style="margin:0 0 8px">${esc(e.setor)}: as ${vizinhos.length} maiores por valor de mercado. A última linha é a mediana das ${pares.length} empresas do setor.</p>
       <div class="tabela-caixa" style="max-height:none"><table><thead><tr><th class="esq">Empresa</th><th>Valor de mercado</th><th>Nota</th><th>P/L</th><th>P/VP</th><th>Div. 12m</th><th>ROE</th><th>Marg. líq.</th>${fin ? '' : '<th>Dív./EBITDA</th>'}</tr></thead>
@@ -1481,6 +1576,7 @@ function montarAtivo(el, ticker) {
   graficoColunas($('#g-receita'), { pontos: anos.map(a => [String(a[0]), a[1]]), fmt: dinheiro });
   graficoColunas($('#g-div'), { pontos: anos.map(a => [String(a[0]), a[3] == null ? null : Math.abs(a[3])]), fmt: dinheiro });
   graficoColunas($('#g-tri'), { pontos: (D.trimestres?.[e.cnpj] ?? []).slice(-8).map(t => [rotuloTrimestre(t[0]), t[1]]), fmt: dinheiro });
+  desenharTermometro(e, ticker);
 
   // Cada abertura ganha um número: resposta que chega depois de outra abertura é descartada
   const minhaVez = ++aberturaAtivo;
