@@ -1153,19 +1153,17 @@ const COLUNAS = [
   { k: 'liquidez', r: 'Liquidez/dia', f: v => dinheiro(v), maior: 1 },
   { k: 'selos', r: 'Selos', esq: true, f: (v, e) => selos(e), semOrdem: true },
 ];
-const estadoRanking = { grupo: 'empresas', busca: '', setor: '', liquidez: 1e6, grandes: true, perenes: false, oport: false, graham: false, bazin: false, magica: false, foraRanking: false, ordens: [{ k: 'nota_geral', desc: true, invertido: false }] };
+const estadoRanking = { soFinanceiras: false, busca: '', setor: '', liquidez: 1e6, grandes: true, perenes: false, oport: false, graham: false, bazin: false, magica: false, foraRanking: false, ordens: [{ k: 'nota_geral', desc: true, invertido: false }] };
 
 function montarRanking(el) {
   const setores = [...new Set(D.empresas.map(e => e.setor))].filter(Boolean).sort((a, b) => a.localeCompare(b, 'pt-BR'));
   el.innerHTML = `
     <h2>Ranking</h2>
-    <p class="intro">Notas de 0 a 100 comparam cada empresa com as demais do mesmo grupo. Bancos e seguradoras têm
-      régua própria (sem EBITDA nem dívida líquida). Clique numa linha para abrir a ficha.</p>
+    <p class="intro">Ranking geral, com todas as empresas juntas. As notas de 0 a 100 comparam cada empresa com as do mesmo tipo:
+      bancos e seguradoras têm régua própria (sem EBITDA, dívida líquida nem nota de saúde), e a nota geral deles é a média
+      das outras três. Clique numa linha para abrir a ficha.</p>
     <p class="tile-sub" style="margin:-8px 0 12px">Ordenar: clique em um ou mais títulos. O 1º clique inclui o critério, o 2º inverte, o 3º tira. Com dois ou mais, a lista sobe quem vai bem em todos ao mesmo tempo (coluna Combinado).</p>
     <div class="filtros">
-      <span class="segmentado" role="group" aria-label="Grupo">
-        <button data-grupo="empresas">Empresas</button><button data-grupo="financeiras">Bancos e seguradoras</button>
-      </span>
       <input type="search" id="r-busca" placeholder="Buscar ticker ou nome" aria-label="Buscar">
       <select id="r-setor" aria-label="Setor"><option value="">Todos os setores</option>${setores.map(s => `<option>${esc(s)}</option>`).join('')}</select>
       <select id="r-liq" aria-label="Liquidez mínima">
@@ -1174,6 +1172,7 @@ function montarRanking(el) {
       </select>
       <label title="Valor de mercado mínimo da visão de foco (bancos e seguradoras têm corte maior)"><input type="checkbox" id="r-grandes" checked> Só empresas grandes</label>
       <label title="Bancos, seguros, energia, saneamento e telecom"><input type="checkbox" id="r-perenes"> Só setores perenes</label>
+      <label title="Só bancos, seguradoras e holdings financeiras, com as colunas que fazem sentido para eles"><input type="checkbox" id="r-fin"> Só bancos e seguradoras</label>
       <label><input type="checkbox" id="r-oport"> Só oportunidades</label>
       <label><input type="checkbox" id="r-graham"> Graham</label>
       <label><input type="checkbox" id="r-bazin"> Bazin</label>
@@ -1184,12 +1183,14 @@ function montarRanking(el) {
     <div class="filtros" id="r-ordem"></div>
     <div class="tabela-caixa"><table id="r-tabela"><thead></thead><tbody></tbody></table></div>`;
   const s = estadoRanking;
-  for (const btn of el.querySelectorAll('[data-grupo]')) btn.addEventListener('click', () => { s.grupo = btn.dataset.grupo; desenharRanking(); });
   $('#r-busca').addEventListener('input', ev => { s.busca = ev.target.value.trim().toUpperCase(); desenharRanking(); });
   $('#r-setor').addEventListener('change', ev => { s.setor = ev.target.value; desenharRanking(); });
   $('#r-liq').addEventListener('change', ev => { s.liquidez = Number(ev.target.value); desenharRanking(); });
-  for (const [id, k] of [['r-grandes', 'grandes'], ['r-perenes', 'perenes'], ['r-oport', 'oport'], ['r-graham', 'graham'], ['r-bazin', 'bazin'], ['r-magica', 'magica'], ['r-fora', 'foraRanking']])
+  for (const [id, k] of [['r-grandes', 'grandes'], ['r-perenes', 'perenes'], ['r-fin', 'soFinanceiras'], ['r-oport', 'oport'], ['r-graham', 'graham'], ['r-bazin', 'bazin'], ['r-magica', 'magica'], ['r-fora', 'foraRanking']]) {
+    // Volta à aba com as caixas como estavam
+    $(`#${id}`).checked = !!s[k];
     $(`#${id}`).addEventListener('change', ev => { s[k] = ev.target.checked; desenharRanking(); });
+  }
   $('#r-tabela tbody').addEventListener('click', ev => { const tr = ev.target.closest('tr[data-ticker]'); if (tr) irPara(`empresa/${tr.dataset.ticker}`); });
   $('#r-ordem').addEventListener('click', ev => { if (ev.target.closest('#r-limpar')) { s.ordens = [{ k: 'nota_geral', desc: true, invertido: false }]; desenharRanking(); } });
   $('#r-tabela tbody').addEventListener('keydown', ev => { const tr = ev.target.closest('tr[data-ticker]'); if (tr && ev.key === 'Enter') irPara(`empresa/${tr.dataset.ticker}`); });
@@ -1204,10 +1205,9 @@ function montarRanking(el) {
   desenharRanking();
 }
 function desenharRanking() {
-  const s = estadoRanking, fin = s.grupo === 'financeiras';
-  for (const b of document.querySelectorAll('[data-grupo]')) b.setAttribute('aria-pressed', b.dataset.grupo === s.grupo);
+  const s = estadoRanking, fin = s.soFinanceiras;
   const cols = COLUNAS.filter(c => !(fin && c.nf));
-  const linhas = D.empresas.filter(e => !!e.financeira === fin
+  const linhas = D.empresas.filter(e => (!fin || e.financeira)
     && (s.foraRanking || e.elegivel)
     && (e.liquidez ?? 0) >= s.liquidez
     && (!s.grandes || grande(e)) && (!s.perenes || perene(e))
