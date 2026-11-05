@@ -5,6 +5,8 @@
 import { log } from './util.js';
 
 const BASE = 'https://sistemaswebb3-listados.b3.com.br/listedCompaniesProxy/CompanyCall';
+// Versão do método de coleta: mudar este texto faz a próxima execução refazer a busca
+const METODO = 'historico-completo-2026-11-05';
 const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64');
 const dataIso = br => (/^\d\d\/\d\d\/\d{4}$/.test(br ?? '') ? br.split('/').reverse().join('-') : null);
 const numero = s => (s ? Number(String(s).replace(/\./g, '').replace(',', '.')) : null);
@@ -51,14 +53,16 @@ export async function atualizarProventos(db, { completo = false } = {}) {
   criarTabelasProventos(db);
   const hoje = new Date().toISOString().slice(0, 10);
   const ultima = db.prepare("SELECT valor FROM meta WHERE chave = 'proventos_data'").get()?.valor;
-  if (!completo && ultima === hoje) { log('Proventos já atualizados hoje'); return; }
+  // A troca do método de coleta (METODO) força uma nova busca no mesmo dia, para corrigir a base já gravada
+  const metodo = db.prepare("SELECT valor FROM meta WHERE chave = 'proventos_metodo'").get()?.valor;
+  if (!completo && ultima === hoje && metodo === METODO) { log('Proventos já atualizados hoje'); return; }
   // Só prefixos negociados no último mês: códigos antigos (ELET, CCRO...) a B3 já não reconhece,
   // e o histórico deles aparece pelo código novo (AXIA, MOTV...)
   const codigos = db.prepare(`SELECT DISTINCT substr(t.ticker, 1, 4) c FROM tickers t
     WHERE t.tipo = 'acao' AND t.ticker IN (SELECT DISTINCT ticker FROM cotacoes WHERE data >= date('now', '-30 day'))
     ORDER BY c`).all().map(r => r.c);
   const comHistorico = new Set(db.prepare('SELECT DISTINCT codigo FROM proventos').all().map(r => r.codigo));
-  log(`Proventos da B3: ${codigos.length} empresas${completo ? ' (histórico completo)' : `, ${codigos.filter(c => !comHistorico.has(c)).length} com histórico completo`}`);
+  log(`Proventos da B3: ${codigos.length} empresas (histórico completo; ${codigos.filter(c => !comHistorico.has(c)).length} novas)`);
 
   const insProv = db.prepare(`INSERT INTO proventos (codigo, classe, tipo, data_com, aprovado, valor, preco_com, pagamento)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
@@ -71,7 +75,10 @@ export async function atualizarProventos(db, { completo = false } = {}) {
   async function umaEmpresa(codigo) {
     const sup = (await chamar('GetListedSupplementCompany', { issuingCompany: codigo, language: 'pt-br' }))?.[0];
     if (!sup?.tradingName) { semCadastro.push(codigo); return; }
-    const tudo = completo || !comHistorico.has(codigo);
+    // Sempre o histórico inteiro (de 1 a 8 páginas por empresa, ~30 s no total). A B3 ordena por classe,
+    // todas as ON antes das PN: só com a 1ª página, a busca apagava e não regravava as PN (Itaú, Petrobras e
+    // Bradesco ficaram com dividend yield zero na rotina de 05/11/2026)
+    const tudo = true;
     // Data de pagamento só vem nos proventos recentes do complemento
     const pagamentos = new Map();
     for (const c of sup.cashDividends ?? []) {
@@ -128,6 +135,7 @@ export async function atualizarProventos(db, { completo = false } = {}) {
     + (semCadastro.length ? `; sem cadastro na B3: ${semCadastro.join(', ')}` : ''));
   if (erros > codigos.length / 2) throw new Error(`B3 falhou em ${erros} de ${codigos.length} empresas`);
   db.prepare("INSERT OR REPLACE INTO meta (chave, valor) VALUES ('proventos_data', ?)").run(hoje);
+  db.prepare("INSERT OR REPLACE INTO meta (chave, valor) VALUES ('proventos_metodo', ?)").run(METODO);
 }
 
 // Fator acumulado de desdobramentos, grupamentos e bonificações depois de uma data: divide preços e
