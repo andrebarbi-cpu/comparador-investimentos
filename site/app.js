@@ -279,7 +279,7 @@ function montarInicio(el) {
       <div class="bloco"><h3>Hoje</h3><div class="tile-valor ${classeSinal(t.dia)}">${t.dia >= 0 ? '+' : '−'}${dinheiro(Math.abs(t.dia))}</div>
         <div class="tile-sub"><span class="${classeSinal(t.dia)}">${pctSinal(t.dia / (t.bolsa - t.dia))}</span> em ações e ETFs</div></div>
       <div class="bloco"><h3>Renda anual estimada</h3><div class="tile-valor">${dinheiro(t.renda)}</div><div class="tile-sub">${dinheiro(t.renda / 12)} por mês, pelos dividendos de 12 meses</div></div>
-    </div>` : `<div class="aviso" style="border-left-color:var(--destaque)"><div>Preencha as quantidades na <a href="#carteiras">Carteira</a>
+    </div>` : `<div class="aviso aviso-info"><div>Preencha as quantidades na <a href="#carteiras">Carteira</a>
       para ver aqui o saldo, quanto ela variou hoje e a renda estimada. Os números ficam só neste aparelho.</div></div>`}
     <div class="inicio-grade">
       <div class="grafico-bloco"><h3>Merece atenção</h3><div class="tile-sub">Gatilhos das regras da carteira e movimentos fortes do dia</div>
@@ -629,7 +629,7 @@ function montarCarteiras(el) {
     <h2>Carteira</h2>
     <p class="intro">Todos os ativos que vocês acompanham numa lista só. Cada um preenche as próprias quantidades: elas ficam
       salvas só neste aparelho e nunca vão para o site. Para levar para outro celular, use “Gerar link com minhas quantidades” no fim da página.</p>
-    ${avisoImportacao ? `<div class="aviso" style="border-left-color:var(--destaque)"><div>${esc(avisoImportacao)}</div></div>` : ''}
+    ${avisoImportacao ? `<div class="aviso aviso-info"><div>${esc(avisoImportacao)}</div></div>` : ''}
     ${blocoAgenda()}
     <div id="cart-corpo"></div>
     <div class="grafico-bloco" style="margin-top:20px">
@@ -1448,7 +1448,7 @@ function montarAtivo(el, ticker) {
 
     <section class="ativo-secao" id="s-resumo"><h3 class="secao">Resumo</h3>
       ${blocoUltimoResultado(e)}
-      ${e.oportunidade ? `<div class="aviso" style="border-left-color:var(--destaque)"><div><strong>Por que é oportunidade:</strong> ${esc(e.motivo)}.</div></div>` : ''}
+      ${e.oportunidade ? `<div class="aviso aviso-info"><div><strong>Por que é oportunidade:</strong> ${esc(e.motivo)}.</div></div>` : ''}
       ${!e.elegivel ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Fora do ranking:</strong> ${(e.liquidez ?? 0) < 1e6 ? 'negocia menos de R$ 1 mi por dia' : 'balanço atrasado ou sem lucro informado'}, por isso não recebe nota.</div></div>` : ''}
       ${e.alertas ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Atenção</strong>${listaAlertas(e.alertas)}</div></div>` : ''}
       <div class="blocos">
