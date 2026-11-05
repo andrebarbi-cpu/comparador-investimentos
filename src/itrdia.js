@@ -68,7 +68,9 @@ export function lerItrXml(xml) {
 }
 
 // ITRs entregues nos últimos 60 dias por empresas acompanhadas e ainda sem número na base
-export async function atualizarItrDoDia(db) {
+// A CVM é lenta para quem acessa de fora do país (no GitHub, ~45 s por documento): cada execução lê
+// por no máximo limiteMs e deixa o resto para a próxima (as do pregão rodam de hora em hora).
+export async function atualizarItrDoDia(db, { limiteMs = 8 * 60000 } = {}) {
   criarTabelaEntregas(db);
   const pendentes = db.prepare(`SELECT n.cd_cvm, n.dt_refer, n.dt_entrega, n.seq, n.versao, n.protocolo, e.cnpj, e.nome
     FROM entregas n JOIN empresas e ON CAST(e.cd_cvm AS INTEGER) = CAST(n.cd_cvm AS INTEGER)
@@ -85,9 +87,11 @@ export async function atualizarItrDoDia(db) {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'enet')`);
   const pasta = join(BRUTOS, 'enet');
   mkdirSync(pasta, { recursive: true });
-  let lidos = 0;
+  let lidos = 0, adiados = 0;
+  const inicio = Date.now();
   const falhas = [];
   for (const p of pendentes) {
+    if (Date.now() - inicio > limiteMs) { adiados++; continue; }
     try {
       // O ENET recusa conexões em sequência às vezes: até 3 tentativas, com pausa crescente
       let buf;
@@ -119,6 +123,6 @@ export async function atualizarItrDoDia(db) {
       lidos++;
     } catch (e) { falhas.push(`${p.nome}: ${e.message}`); }
   }
-  log(`ITR do dia: ${lidos} de ${pendentes.length} lidos direto da CVM${falhas.length ? `; falhas: ${falhas.slice(0, 5).join(' | ')}` : ''}`);
-  if (falhas.length && !lidos) throw new Error(`nenhum ITR lido (${falhas[0]})`);
+  log(`ITR do dia: ${lidos} de ${pendentes.length} lidos direto da CVM${adiados ? ` (${adiados} ficam para a próxima execução)` : ''}${falhas.length ? `; falhas: ${falhas.slice(0, 5).join(' | ')}` : ''}`);
+  if (falhas.length && !lidos && !adiados) throw new Error(`nenhum ITR lido (${falhas[0]})`);
 }
