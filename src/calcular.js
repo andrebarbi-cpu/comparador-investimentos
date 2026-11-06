@@ -221,16 +221,23 @@ export function calcular(db) {
 
     // Comparação com o próprio histórico (meses anteriores a hoje)
     const anteriores = pontos.filter(x => x.data < hoje);
-    const percentilProprio = (campo, atual) => {
-      const hist = anteriores.map(x => x[campo]).filter(x => x != null && x > 0).sort((a, b) => a - b);
+    const percentilProprio = (campo, atual, desde = '', minimo = 24) => {
+      const hist = anteriores.filter(x => x.data >= desde).map(x => x[campo]).filter(x => x != null && x > 0).sort((a, b) => a - b);
       // Faixa "normal" do próprio histórico: abaixo do p25 está barato, acima do p75 está caro
       const faixa = { mediana: mediana(hist), p25: hist[Math.floor(0.25 * (hist.length - 1))] ?? null,
         p75: hist[Math.floor(0.75 * (hist.length - 1))] ?? null, n: hist.length };
-      if (hist.length < 24 || atual == null) return { ...faixa, pct: null };
+      if (hist.length < minimo || atual == null) return { ...faixa, pct: null };
       return { ...faixa, pct: 100 * hist.filter(x => x < atual).length / hist.length };
     };
     const histPl = percentilProprio('pl', m.pl);
     const histEvEbit = percentilProprio('ev_ebit', m.ev_ebit);
+    // Os mesmos múltiplos só nos últimos 2 anos. A mediana desde 2020 inclui 2020–2022, com juro real
+    // perto de zero, quando o mercado aceitava pagar mais caro por qualquer lucro. Com o Tesouro IPCA+
+    // a 7–8%, "barato contra 2020" exagerava o desconto: a Multiplan parecia 40% abaixo do normal
+    // (mediana 15) e estava só 10–20% abaixo do que valeu em 2025–2026 (10 a 12).
+    const doisAnos = menosAnos(hoje, 2);
+    const histPl2a = percentilProprio('pl', m.pl, doisAnos, 18);
+    const histEvEbit2a = percentilProprio('ev_ebit', m.ev_ebit, doisAnos, 18);
     const histPvp = percentilProprio('pvp', m.pvp);
     const histDy = { mediana: mediana(anteriores.map(x => x.dy)) };
 
@@ -396,6 +403,9 @@ export function calcular(db) {
       pl_mediana: histPl.mediana, pl_percentil: histPl.pct, pl_p25: histPl.p25, pl_p75: histPl.p75,
       ev_ebit_mediana: histEvEbit.mediana, ev_ebit_percentil: histEvEbit.pct,
       pvp_mediana: histPvp.mediana, pvp_percentil: histPvp.pct, dy_mediana: histDy.mediana,
+      // e só nos últimos 2 anos (mesmo patamar de juros de hoje)
+      pl_mediana_2a: histPl2a.mediana, pl_percentil_2a: histPl2a.pct, pl_p25_2a: histPl2a.p25, pl_p75_2a: histPl2a.p75,
+      ev_ebit_mediana_2a: histEvEbit2a.mediana, ev_ebit_percentil_2a: histEvEbit2a.pct,
       meses_historico: Math.max(histPl.n, histEvEbit.n),
       // Graham e Bazin como margem sobre o preço atual
       graham_margem: graham ? graham / precoRef - 1 : null,
@@ -578,6 +588,13 @@ function percentis(grupo, campo, maiorMelhor = true) {
   return f => pct.get(f) ?? null;
 }
 
+// Percentil do múltiplo contra o próprio histórico pela régua mais exigente: desde 2020 e últimos 2 anos.
+// Só é "barata" se for barata contra os dois (o pior dos percentis).
+function pctRegua(f, campo) {
+  const v = [f[`${campo}_percentil`], f[`${campo}_percentil_2a`]].filter(x => x != null);
+  return v.length ? Math.max(...v) : null;
+}
+
 // Notas de 0 a 100 em cada pilar, relativas às outras empresas do mesmo grupo
 function pontuar(grupo, financeiras) {
   if (!grupo.length) return;
@@ -606,7 +623,7 @@ function pontuar(grupo, financeiras) {
   for (const f of grupo) {
     const consistencia = f.anos_lucro_base ? 100 * f.anos_lucro / f.anos_lucro_base : null;
     // P/L contra o histórico também usa o lucro inflado: com lucro suspeito vale só o EV/EBIT (operacional)
-    const pctHist = f.lucro_suspeito ? f.ev_ebit_percentil : f.pl_percentil ?? f.ev_ebit_percentil;
+    const pctHist = f.lucro_suspeito ? pctRegua(f, 'ev_ebit') : pctRegua(f, 'pl') ?? pctRegua(f, 'ev_ebit');
     const baratoVsHistorico = pctHist != null ? 100 - pctHist : null;
     f.nota_qualidade = media(financeiras
       ? [P.roe(f), consistencia]
@@ -643,16 +660,20 @@ function marcarOportunidades(fotos, db) {
     f.tesouro_ipca_ref = ipca ?? null;
     f.premio_vs_tesouro = f.earnings_yield != null && ipca != null ? f.earnings_yield - ipca / 100 : null;
 
-    const pctHist = f.pl_percentil ?? f.ev_ebit_percentil;
-    const ok = f.elegivel && f.lucro_12m > 0 && pctHist != null && pctHist <= 25 && !f.alertas.includes('desdobramento') && !f.lucro_suspeito
+    const usaPl = f.pl_percentil != null;
+    const pctHist = usaPl ? pctRegua(f, 'pl') : pctRegua(f, 'ev_ebit');
+    const ok =f.elegivel && f.lucro_12m > 0 && pctHist != null && pctHist <= 25 && !f.alertas.includes('desdobramento') && !f.lucro_suspeito
       && f.nota_qualidade >= 60 && (f.financeira || f.nota_saude >= 50);
     f.oportunidade = ok ? 1 : 0;
     f.nota_oportunidade = ok ? Math.round(0.5 * media([f.nota_qualidade, f.nota_saude]) + 0.5 * (100 - pctHist)) : null;
     if (ok) {
-      const campo = f.pl_percentil != null ? 'P/L' : 'EV/EBIT';
-      const atual = f.pl_percentil != null ? f.pl : f.ev_ebit, med = f.pl_percentil != null ? f.pl_mediana : f.ev_ebit_mediana;
-      f.motivo = `${campo} ${br(atual, 1)} contra mediana de ${br(med, 1)} desde 2020 (${Math.round(100 * (atual / med - 1))}%), `
-        + `mais barato que em ${Math.round(100 - pctHist)}% dos meses; ROE ${br(100 * f.roe, 0)}%`
+      const campo = usaPl ? 'P/L' : 'EV/EBIT';
+      const atual = usaPl ? f.pl : f.ev_ebit, med = usaPl ? f.pl_mediana : f.ev_ebit_mediana;
+      const med2a = usaPl ? f.pl_mediana_2a : f.ev_ebit_mediana_2a;
+      const contra = (m, quando) => `${br(m, 1)} ${quando} (${Math.round(100 * (atual / m - 1))}%)`;
+      f.motivo = `${campo} ${br(atual, 1)} contra mediana de ${contra(med, 'desde 2020')}`
+        + (med2a != null ? ` e ${contra(med2a, 'nos últimos 2 anos')}` : '')
+        + `; ROE ${br(100 * f.roe, 0)}%`
         + (f.financeira ? '' : `, dívida líq./EBITDA ${br(f.div_liq_ebitda, 1)}`);
     } else f.motivo = null;
   }

@@ -82,6 +82,21 @@ const porCnpj = new Map();
 for (const e of D.empresas) {
   porCnpj.set(e.cnpj, e);
   for (const t of e.tickers.split(' ')) porTicker.set(t, e);
+  e.regua = reguaPl(e);
+  e.pl_pct_regua = e.regua.pct;
+}
+
+// Régua do P/L contra o próprio histórico. A mediana desde 2020 inclui os anos de juro real perto de
+// zero (2020–2022), quando qualquer lucro valia mais; com o Tesouro IPCA+ a 7–8% ela exagera o
+// desconto. Vale a mais exigente entre "desde 2020" e "últimos 2 anos": preço normal e caro pela
+// mediana e pelo percentil 75 MENORES, e "mais barato que" pelo percentil MAIOR.
+function reguaPl(e) {
+  const menor = (a, b) => ok(a) && ok(b) ? Math.min(a, b) : (ok(a) ? a : b);
+  const pcts = [e.pl_percentil, e.pl_percentil_2a].filter(ok);
+  const mediana = menor(e.pl_mediana, e.pl_mediana_2a);
+  return { mediana, p25: menor(e.pl_p25, e.pl_p25_2a), p75: menor(e.pl_p75, e.pl_p75_2a),
+    pct: pcts.length ? Math.max(...pcts) : null,
+    recente: ok(e.pl_mediana_2a) && ok(e.pl_mediana) && e.pl_mediana_2a < e.pl_mediana };
 }
 const listaTickers = [...porTicker.keys()].sort();
 const etf = Object.fromEntries(D.etfs.map(e => [e.ticker, e]));
@@ -566,7 +581,7 @@ function montarOportunidades(el) {
   el.innerHTML = `
     <h2>Oportunidades de hoje</h2>
     <p class="intro">Empresas com boa qualidade e finanças saudáveis negociando abaixo do próprio padrão histórico
-      de preço sobre lucro (P/L) desde 2020. A nota combina qualidade, saúde e o tamanho do desconto.
+      de preço sobre lucro (P/L), tanto desde 2020 quanto nos últimos 2 anos, com juro alto como hoje. A nota combina qualidade, saúde e o tamanho do desconto.
       Clique num cartão para ver a ficha completa.</p>
     ${queda ? `<div class="aviso">${ICONE_ALERTA}<div><strong>O mercado está em queda:</strong> o BOVA11 está
       ${pct(-b.distancia_maxima_52s, 0)} abaixo do pico das últimas 52 semanas (${pctSinal(b.ret_1m)} no último mês).
@@ -797,11 +812,11 @@ const COLUNAS_CARTEIRA = [
   { k: 'peso', r: 'Peso', v: l => l.saldo },
   { k: 'dy', r: 'Div. 12m', v: l => l.e?.dy, dica: 'Dividendos e JCP pagos nos últimos 12 meses sobre o preço' },
   { k: 'renda', r: 'Renda/ano', v: l => l.renda, dica: 'Quantidade × preço × dividendos dos últimos 12 meses' },
-  { k: 'pl', r: 'P/L × mediana', v: l => ok(l.e?.pl) && ok(l.e?.pl_mediana) ? l.e.pl / l.e.pl_mediana : null, dica: 'P/L de hoje × mediana desde 2020; ordena pelo desconto' },
-  { k: 'normal', r: 'Normal', v: l => ok(l.g.normal) ? l.g.normal / l.p - 1 : null, dica: 'Preço com o P/L mediano desde 2020, supondo o lucro de hoje; ordena pela distância até ele' },
-  { k: 'caro', r: 'Caro', v: l => ok(l.g.caro) ? l.g.caro / l.p - 1 : null, dica: 'Preço com o P/L do percentil 75 desde 2020, supondo o lucro de hoje' },
+  { k: 'pl', r: 'P/L × mediana', v: l => ok(l.e?.pl) && ok(l.e?.regua.mediana) ? l.e.pl / l.e.regua.mediana : null, dica: 'P/L de hoje × mediana (a menor entre desde 2020 e últimos 2 anos); ordena pelo desconto' },
+  { k: 'normal', r: 'Normal', v: l => ok(l.g.normal) ? l.g.normal / l.p - 1 : null, dica: 'Preço com o P/L mediano (a menor entre desde 2020 e últimos 2 anos), supondo o lucro de hoje; ordena pela distância até ele' },
+  { k: 'caro', r: 'Caro', v: l => ok(l.g.caro) ? l.g.caro / l.p - 1 : null, dica: 'Preço com o P/L do percentil 75 (o menor entre desde 2020 e últimos 2 anos), supondo o lucro de hoje' },
   { k: 'nota', r: 'Nota', v: l => l.e?.nota_geral },
-  { k: 'situacao', r: 'Situação e tese', esq: true, v: l => l.e?.pl_percentil, dica: 'O que a regra manda fazer e o que pesa contra a tese; ordena do mais barato ao mais caro contra o próprio histórico' },
+  { k: 'situacao', r: 'Situação e tese', esq: true, v: l => l.e?.pl_pct_regua, dica: 'O que a regra manda fazer e o que pesa contra a tese; ordena do mais barato ao mais caro contra o próprio histórico' },
 ];
 const ordemCarteira = {};
 const colunaCarteira = k => COLUNAS_CARTEIRA.find(c => c.k === k);
@@ -812,8 +827,8 @@ function blocoAcoes(c) {
   const aviso = criterios.length ? `<div class="filtros" style="margin:0 0 8px"><span class="contagem" style="margin:0">Ordenando por
     ${esc(descreverCriterios(criterios, k => colunaCarteira(k).r))}${combinado ? ' (posição combinada)' : ''}</span>
     <button class="botao" data-limpar-ordem="${esc(c.id)}">Limpar ordenação</button></div>` : '';
-  return `<p class="tile-sub" style="margin:0 0 8px">Normal é o preço em que o P/L volta à mediana desde 2020; caro, ao percentil 75.
-    Os dois supõem o lucro de hoje. A situação segue as regras de config/carteiras.json: elas apontam o momento, a decisão é de vocês.</p>
+  return `<p class="tile-sub" style="margin:0 0 8px">Normal é o preço em que o P/L volta à mediana; caro, ao percentil 75.
+    Vale a régua mais exigente entre desde 2020 e os últimos 2 anos (juro alto como hoje). Os dois supõem o lucro de hoje. A situação segue as regras de config/carteiras.json: elas apontam o momento, a decisão é de vocês.</p>
   ${aviso}<div class="tabela-caixa" style="max-height:none"><table>
     <thead><tr>${COLUNAS_CARTEIRA.map(col => `<th data-ordem="${col.k}" class="${col.esq ? 'esq' : ''}"
       ${col.dica ? `title="${esc(col.dica)}"` : ''} ${criterios[0]?.k === col.k ? `aria-sort="${criterios[0].desc ? 'descending' : 'ascending'}"` : ''}>${col.r}${marcaCriterio(criterios, col.k)}</th>`).join('')}${combinado ? '<th>Combinado</th>' : ''}</tr></thead>
@@ -824,7 +839,7 @@ function blocoAcoes(c) {
       <td class="${classeSinal(variacao(tk, 365))}">${pctSinal(variacao(tk, 365))}</td>
       <td>${q ? dinheiro(saldo) : '–'}</td><td>${q && total ? pct(saldo / total, 0) : '–'}</td>
       <td>${pct(e?.dy)}</td><td>${q ? dinheiro(renda) : '–'}</td>
-      <td>${ok(e?.pl) && ok(e?.pl_mediana) ? `${num(e.pl)} <span class="setor">× ${num(e.pl_mediana)}</span>` : '–'}</td>
+      <td>${ok(e?.pl) && ok(e?.regua.mediana) ? `${num(e.pl)} <span class="setor">× ${num(e.regua.mediana)}</span>` : '–'}</td>
       <td>${celulaAlvo(g.normal, p)}</td><td>${celulaAlvo(g.caro, p)}</td>
       <td>${medidor(e?.nota_geral)}</td><td class="esq situacao">${situacao(l)}</td>${combinado ? `<td>${medidor(combinado.get(l))}</td>` : ''}</tr>`; }).join('')}</tbody>
   </table></div>
@@ -1119,7 +1134,8 @@ function gatilhoDolar(c) {
       ${dolarExpressivo || pesoExpressivo ? 'Vender o excesso do IVVB11 e comprar o que caiu é "vender na alta e comprar na queda" num movimento só (ETF paga 15% de IR sobre o lucro).' : 'Até lá, aportes novos resolvem sem pagar IR.'}</p>`;
 }
 
-// Gatilho de uma ação da carteira: preços "normal" (P/L mediano desde 2020) e "caro" (percentil 75)
+// Gatilho de uma ação da carteira: preços "normal" (P/L mediano) e "caro" (percentil 75) pela régua
+// mais exigente entre desde 2020 e últimos 2 anos (reguaPl),
 // supondo o lucro de hoje, o que fazer pela regra e o que pode estar quebrando a tese.
 function gatilhoAcao(tk, e, p) {
   const pisos = REGRAS.roe_minimo ?? {}, ehTrade = (REGRAS.trade ?? []).includes(tk);
@@ -1146,13 +1162,14 @@ function gatilhoAcao(tk, e, p) {
   const conferirAntes = !!pendente || motivos.some(m => m !== 'dividendo extraordinário');
   const quebrada = tese.some(t => t.startsWith('ROE') || t.startsWith('dividendo caiu'));
   let st;
-  if (e.pl >= e.pl_p75) st = ehTrade ? '↑ Cara: realizar o restante' : (e.dy < (e.dy_mediana ?? 0) ? '↑ Cara e com dividendo abaixo do normal: reduzir' : '↑ Cara: parar de aportar');
-  else if (e.pl >= e.pl_mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
-  else if (e.pl <= e.pl_p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes'
+  const r = e.regua;
+  if (e.pl >= r.p75) st = ehTrade ? '↑ Cara: realizar o restante' : (e.dy < (e.dy_mediana ?? 0) ? '↑ Cara e com dividendo abaixo do normal: reduzir' : '↑ Cara: parar de aportar');
+  else if (e.pl >= r.mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
+  else if (e.pl <= r.p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes'
     : pendente ? '↓ Em promoção, mas falta o resultado novo: conferir antes'
     : conferirAntes ? '↓ Em promoção, mas com sinal de piora: conferir antes' : '↓ Em promoção com lucro intacto';
   else st = 'Abaixo do normal: segurar';
-  return { normal: alvo(e.pl_mediana), caro: alvo(e.pl_p75), st, tese, ehTrade, pendente: !!pendente, conferir: conferirAntes };
+  return { normal: alvo(r.mediana), caro: alvo(r.p75), st, tese, ehTrade, pendente: !!pendente, conferir: conferirAntes };
 }
 // Texto de aviso quando o resultado da temporada já saiu (pela agenda) e ainda não está na base
 function resultadoForaDaBase(e) {
@@ -1233,7 +1250,7 @@ const COLUNAS = [
   { k: 'margem_liq', r: 'Marg. líq.', f: v => pct(v), maior: 1, nf: true },
   { k: 'div_liq_ebitda', r: 'Dív./EBITDA', f: v => v >= 99 ? '<span title="EBITDA negativo">n/a</span>' : num(v), maior: 0, nf: true },
   { k: 'cagr_lucro_5a', r: 'Lucro 5a', f: v => pct(v), maior: 1, dica: 'Crescimento anual do lucro em 5 anos' },
-  { k: 'pl_percentil', r: 'P/L × hist.', f: v => ok(v) ? `${num(v, 0)}%` : '–', maior: 0, dica: 'Em quantos % dos meses desde 2020 o P/L foi MENOR que hoje (baixo = barato contra o próprio histórico)' },
+  { k: 'pl_pct_regua', r: 'P/L × hist.', f: v => ok(v) ? `${num(v, 0)}%` : '–', maior: 0, dica: 'Em quantos % dos meses o P/L foi MENOR que hoje (baixo = barato contra o próprio histórico). Vale o maior entre desde 2020 e os últimos 2 anos: só é barata se for barata contra os dois' },
   { k: 'liquidez', r: 'Liquidez/dia', f: v => dinheiro(v), maior: 1 },
   { k: 'selos', r: 'Selos', esq: true, f: (v, e) => selos(e), semOrdem: true },
 ];
@@ -1537,10 +1554,11 @@ function montarAtivo(el, ticker) {
             .map(([r, v]) => `<div class="medidor"><span>${r}</span>${ok(v) ? `<i style="--v:${v}%"></i><span>${v}</span>` : '<span class="vazio">–</span>'}</div>`).join('')}
           ${e.magica_posicao ? `<div class="tile-sub">Fórmula Mágica: ${e.magica_posicao}ª posição</div>` : ''}</div></div>
         <div class="bloco"><h3>Preço contra o próprio histórico</h3><dl class="lista">
-          ${linha('P/L hoje', num(e.pl), EXPLICA['P/L'])}${linha('Mediana desde 2020', num(e.pl_mediana), 'O P/L típico da própria empresa desde 2020: a referência de "preço normal".')}
-          ${linha('Faixa barata–cara', ok(e.pl_p25) ? `${num(e.pl_p25)} a ${num(e.pl_p75)}` : '–', 'Percentis 25 e 75 do P/L mês a mês desde 2020: abaixo do primeiro está barata; acima do segundo, cara.')}
-          ${linha('Mais barato que em', ok(e.pl_percentil) ? `${num(100 - e.pl_percentil, 0)}% dos meses` : '–', 'Em quantos meses desde 2020 o P/L esteve mais alto que hoje.')}
-          ${g && ok(g.normal) ? linha('Preço normal / caro', `R$ ${num(g.normal, 2)} / R$ ${num(g.caro, 2)}`, 'Preço em que o P/L volta à mediana e ao percentil 75, com o lucro de hoje.') : ''}
+          ${linha('P/L hoje', num(e.pl), EXPLICA['P/L'])}${linha('Mediana desde 2020', num(e.pl_mediana), 'O P/L típico da própria empresa desde 2020. Inclui 2020–2022, com juro real perto de zero, quando qualquer lucro valia mais.')}
+          ${linha('Mediana dos últimos 2 anos', num(e.pl_mediana_2a), 'O P/L típico nos últimos 24 meses, com juros no patamar de hoje (Tesouro IPCA+ perto de 7–8%). É a referência mais justa quando o juro está alto.')}
+          ${linha('Faixa barata–cara', ok(e.regua.p25) ? `${num(e.regua.p25)} a ${num(e.regua.p75)}` : '–', 'Percentis 25 e 75 do P/L mês a mês (os menores entre desde 2020 e últimos 2 anos): abaixo do primeiro está barata; acima do segundo, cara.')}
+          ${linha('Mais barato que em', ok(e.regua.pct) ? `${num(100 - e.regua.pct, 0)}% dos meses` : '–', 'Em quantos meses o P/L esteve mais alto que hoje, pela régua mais exigente (desde 2020 ou últimos 2 anos).')}
+          ${g && ok(g.normal) ? linha('Preço normal / caro', `R$ ${num(g.normal, 2)} / R$ ${num(g.caro, 2)}`, 'Preço em que o P/L volta à mediana e ao percentil 75 (a régua mais exigente), com o lucro de hoje.') : ''}
         </dl>${g ? `<div class="selos" style="margin-top:8px"><span class="selo">${g.st}</span></div>` : ''}</div>
         <div class="bloco"><h3>Preço justo pelos métodos clássicos</h3><dl class="lista">
           ${linha('Graham', ok(justoGraham) ? `R$ ${num(justoGraham, 2)} ${sinal(e.graham_margem)}` : '–')}
@@ -1564,7 +1582,7 @@ function montarAtivo(el, ticker) {
           `<button data-periodo="${k}" aria-pressed="${k === '1a'}">${r}</button>`).join('')}</span></div>
         <div class="grafico" id="g-preco"></div>
         <div class="tile-sub">Fechamento diário ajustado por desdobramentos, grupamentos e bonificações (não por dividendos).</div></div>
-      <div class="graficos" style="margin-top:12px"><div class="grafico-bloco"><h3>P/L mês a mês</h3><div class="tile-sub">Linha cinza: mediana desde 2020. Meses sem lucro ficam em branco.</div><div class="grafico" id="g-pl"></div></div>
+      <div class="graficos" style="margin-top:12px"><div class="grafico-bloco"><h3>P/L mês a mês</h3><div class="tile-sub">Linha cinza: mediana desde 2020; tracejada: mediana dos últimos 2 anos (juro alto como hoje). Meses sem lucro ficam em branco.</div><div class="grafico" id="g-pl"></div></div>
         <div class="grafico-bloco"><h3>P/VP mês a mês</h3><div class="tile-sub">Preço sobre patrimônio líquido</div><div class="grafico" id="g-pvp"></div></div></div>
     </section>
 
@@ -1687,7 +1705,9 @@ function montarAtivo(el, ticker) {
   }, { rootMargin: '-30% 0px -60% 0px' });
   for (const s of el.querySelectorAll('.ativo-secao')) observadorSecoes.observe(s);
 
-  graficoLinhas($('#g-pl'), { series: [{ nome: 'P/L', cor: 'var(--serie-1)', pontos: hist.map(x => [x[0], x[1]]) }], fmt: v => num(v), ref: ok(e.pl_mediana) ? { y: e.pl_mediana, rotulo: `mediana ${num(e.pl_mediana)}` } : null });
+  graficoLinhas($('#g-pl'), { series: [{ nome: 'P/L', cor: 'var(--serie-1)', pontos: hist.map(x => [x[0], x[1]]) }], fmt: v => num(v), ref: [
+    ok(e.pl_mediana) ? { y: e.pl_mediana, rotulo: `mediana desde 2020: ${num(e.pl_mediana)}` } : null,
+    ok(e.pl_mediana_2a) ? { y: e.pl_mediana_2a, rotulo: `últimos 2 anos: ${num(e.pl_mediana_2a)}`, tracejado: true, direita: true } : null] });
   graficoLinhas($('#g-pvp'), { series: [{ nome: 'P/VP', cor: 'var(--serie-1)', pontos: hist.map(x => [x[0], x[2]]) }], fmt: v => num(v, 2), ref: ok(e.pvp_mediana) ? { y: e.pvp_mediana, rotulo: `mediana ${num(e.pvp_mediana, 2)}` } : null });
   graficoLinhas($('#g-dy'), { series: [{ nome: 'Dividend yield', cor: 'var(--serie-3)', pontos: hist.map(x => [x[0], x[4]]) }], fmt: v => pct(v), fmtEixo: v => pct(v, 0), eixoZero: true });
   if (!fin) {
@@ -1891,6 +1911,7 @@ const LINHAS_COMPARAR = [
   ['Crescimento', e => e.nota_crescimento ?? '–', 'nota_crescimento', 1],
   ['P/L', e => num(e.pl), 'pl', 0],
   ['P/L × mediana desde 2020', e => ok(e.pl) && ok(e.pl_mediana) ? pctSinal(e.pl / e.pl_mediana - 1, 0) : '–'],
+  ['P/L × mediana dos últimos 2 anos', e => ok(e.pl) && ok(e.pl_mediana_2a) ? pctSinal(e.pl / e.pl_mediana_2a - 1, 0) : '–'],
   ['P/VP', e => num(e.pvp, 2), 'pvp', 0],
   ['EV/EBITDA', e => num(e.ev_ebitda), 'ev_ebitda', 0],
   ['Dividend yield (12 meses)', e => pct(e.dy), 'dy', 1],
@@ -2178,7 +2199,12 @@ function montarMetodo(el) {
       </ul>
       <h3>Oportunidade</h3>
       <p>Empresa com lucro, qualidade ≥ 60, saúde ≥ 50 e P/L (ou EV/EBIT) mais barato do que em pelo menos 75% dos meses
-        desde 2020. A nota de oportunidade é metade qualidade e saúde, metade o tamanho do desconto.</p>
+        desde 2020 <b>e</b> também nos últimos 2 anos. A nota de oportunidade é metade qualidade e saúde, metade o tamanho do desconto.</p>
+      <h3>Por que duas réguas de histórico</h3>
+      <p>Entre 2020 e 2022 o juro real ficou perto de zero, e o mercado pagava mais caro por qualquer lucro. Com o Tesouro IPCA+
+        a 7–8%, comparar com a mediana desde 2020 exagera o desconto: uma ação podia parecer 40% abaixo do normal e estar só
+        10–20% abaixo do que valeu nos últimos 2 anos, com juro parecido com o de hoje. Por isso o site usa sempre a régua mais
+        exigente: preço normal e caro pela mediana e pelo percentil 75 menores, e "barata" só se for barata contra as duas.</p>
       <h3>Selos clássicos</h3>
       <ul>
         <li><b>Graham:</b> preço abaixo de √(22,5 × lucro por ação × patrimônio por ação).</li>
@@ -2257,9 +2283,11 @@ function graficoLinhas(el, { series, fmt, fmtEixo = null, ref = null, altura = 2
   const mapas = series.map(s => new Map(s.pontos));
   const ultimos = mapas.map(mp => mp.get(meses.findLast(mm => ok(mp.get(mm))))).filter(ok);
   const idClip = `clip${Math.random().toString(36).slice(2)}`;
+  // ref: uma linha de referência ou várias ({ y, rotulo, tracejado, direita })
+  const refs = [].concat(ref ?? []).filter(r => ok(r?.y));
   montarGrafico(el, w => {
-    let lo = Math.min(...vals, ...(ref ? [ref.y] : []));
-    const hi = tetoRobusto(vals, [...(ref ? [ref.y] : []), ...ultimos]);
+    let lo = Math.min(...vals, ...refs.map(r => r.y));
+    const hi = tetoRobusto(vals, [...refs.map(r => r.y), ...ultimos]);
     if (eixoZero) lo = Math.min(0, lo);
     const esc_ = escalaBonita(lo, hi);
     const passo = esc_.marcas[1] - esc_.marcas[0];
@@ -2277,8 +2305,8 @@ function graficoLinhas(el, { series, fmt, fmtEixo = null, ref = null, altura = 2
     for (const v of esc_.marcas) svg += `<line x1="${m.e}" x2="${W - m.d}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--grade)" stroke-width="1"/>
       <text x="${m.e - 6}" y="${Y(v) + 4}" text-anchor="end">${esc(rotY(v))}</text>`;
     anos.filter((_, k) => k % passoAno === 0).forEach(([mm, i]) => { svg += `<text x="${X(i)}" y="${H - 6}" text-anchor="middle">${mm.endsWith('-01') ? mm.slice(0, 4) : mesAno(mm)}</text>`; });
-    if (ref) svg += `<line x1="${m.e}" x2="${W - m.d}" y1="${Y(ref.y)}" y2="${Y(ref.y)}" stroke="var(--texto-3)" stroke-width="1"/>
-      ${ref.rotulo ? `<text x="${m.e + 4}" y="${Y(ref.y) - 5}">${esc(ref.rotulo)}</text>` : ''}`;
+    for (const r of refs) svg += `<line x1="${m.e}" x2="${W - m.d}" y1="${Y(r.y)}" y2="${Y(r.y)}" stroke="var(--texto-3)" stroke-width="1"${r.tracejado ? ' stroke-dasharray="4 3"' : ''}/>
+      ${r.rotulo ? `<text x="${r.direita ? W - m.d - 4 : m.e + 4}" y="${Y(r.y) - 5}"${r.direita ? ' text-anchor="end"' : ''}>${esc(r.rotulo)}</text>` : ''}`;
     mapas.forEach((mp, si) => {
       let d = '', caneta = false;
       meses.forEach((mm, i) => { const v = mp.get(mm); if (ok(v)) { d += `${caneta ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`; caneta = true; } else caneta = false; });
