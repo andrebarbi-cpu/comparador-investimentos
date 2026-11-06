@@ -986,7 +986,7 @@ function gatilhosFaixas(c) {
   const campo = `<label class="tile-sub" style="display:flex;gap:8px;align-items:center;margin:8px 0">Reserva de emergência (fica fora das faixas):
     <input class="campo" type="number" min="0" step="100" data-reserva="${esc(c.id)}" value="${esc(reserva || '')}" placeholder="ex.: 10000" style="width:120px"></label>`;
   if (!investido) return campo;
-  const nomes = { tesouro: 'Tesouro longo', global: 'Global (IVVB11)', acoes: 'Ações Brasil', municao: 'Munição (CDB além da reserva)' };
+  const nomes = { tesouro: 'Tesouro longo', global: 'Global (IVVB11 e WRLD11)', acoes: 'Ações Brasil', municao: 'Munição (CDB além da reserva)' };
   const notaMunicao = c.faixas.municao?.[0] === 0 ? '<p class="tile-sub" style="margin:6px 0 0">A munição pode ficar perto de zero depois de uma compra: os aportes mensais repõem o caixa para a próxima queda.</p>' : '';
   const linhas = Object.entries(nomes).map(([k, nome]) => {
     const [lo, hi] = c.faixas[k] ?? [];

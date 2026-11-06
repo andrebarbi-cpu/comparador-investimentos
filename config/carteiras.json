@@ -7,6 +7,7 @@
       "acoes": [
         "ITSA4",
         "BBAS3",
+        "BBDC4",
         "BBSE3",
         "PSSA3",
         "CPFE3",
@@ -20,7 +21,8 @@
         "VIVT3"
       ],
       "etfs": [
-        "IVVB11"
+        "IVVB11",
+        "WRLD11"
       ],
       "tesouro": [
         {
