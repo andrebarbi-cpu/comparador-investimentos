@@ -14,6 +14,7 @@ import { atualizarProventos } from './proventos.js';
 import { atualizarEntregas } from './entregas.js';
 import { atualizarItrDoDia } from './itrdia.js';
 import { atualizarTermometro } from './termometro.js';
+import { atualizarNoticias } from './noticias.js';
 import { log, anoAtual } from './util.js';
 
 const ANO_INICIO = 2016;
@@ -40,6 +41,8 @@ if (intraday) {
   try { await atualizarEntregas(db); } catch (e) { log('Entregas à CVM indisponíveis agora:', e.message); }
   // ITR entregue hoje: os números entram já, sem esperar o arquivo aberto de domingo
   try { await atualizarItrDoDia(db); } catch (e) { log('ITR do dia indisponível agora:', e.message); }
+  // Notícias das ações acompanhadas e do mercado, para explicar quedas e altas (falha não para nada)
+  try { await atualizarNoticias(db); } catch (e) { log('Notícias indisponíveis agora:', e.message); }
 } else {
   await etapa('cadastro', () => atualizarCadastro(db, ano));
   if (cargaInicial) {
@@ -70,6 +73,7 @@ if (intraday) {
   // uma atualização completa rodada à tarde publicaria o site com os preços de ontem.
   // Falha aqui não deixa a execução vermelha: o preço oficial já foi atualizado acima.
   try { await atualizarIntraday(db); } catch (e) { log('Preços do pregão indisponíveis agora:', e.message); }
+  try { await atualizarNoticias(db); } catch (e) { log('Notícias indisponíveis agora:', e.message); }
 }
 // Recalcula indicadores e notas com o que foi coletado (mesmo que alguma fonte tenha falhado)
 await etapa('cálculo', () => calcular(db));

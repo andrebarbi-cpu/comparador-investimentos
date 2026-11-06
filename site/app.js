@@ -274,6 +274,7 @@ function montarInicio(el) {
       <p class="intro" style="margin-bottom:0">Resumo de ${rotuloPrecos()}: o mercado, a carteira e o que pede atenção.</p></div>
       <a class="botao" href="#carteiras">Abrir a carteira</a></div>
     <div class="indicadores">${blocosMercado()}</div>
+    ${blocoMercadoNoticias()}
     ${temQtd ? `<div class="indicadores indicadores-carteira">
       <div class="bloco"><h3>Sua carteira</h3><div class="tile-valor">${dinheiro(t.saldo)}</div><div class="tile-sub">Saldo estimado com Tesouro e CDB</div></div>
       <div class="bloco"><h3>Hoje</h3><div class="tile-valor ${classeSinal(t.dia)}">${t.dia >= 0 ? '+' : '−'}${dinheiro(Math.abs(t.dia))}</div>
@@ -329,6 +330,78 @@ function blocosMercado() {
   ].filter(Boolean).join('');
 }
 
+// ---------- Notícias ligadas aos movimentos ----------
+// Fatos agrupados por dia e tema (src/noticias.js). Confirmado = dois ou mais veículos reconhecidos
+// publicaram o mesmo tema no mesmo dia; uma fonte sozinha aparece, mas nunca vira "motivo".
+const NOTICIAS = D.noticias ?? {};
+const TEMA_ROTULO = { resultado: 'Resultado', dividendos: 'Dividendos', 'recomendação': 'Recomendação de analistas',
+  'operação societária': 'Operação societária', 'regulação e justiça': 'Regulação e justiça', 'fiscal e política': 'Fiscal e política',
+  'juros e inflação': 'Juros e inflação', exterior: 'Exterior', commodities: 'Commodities', 'câmbio': 'Câmbio', resumo: 'Resumo do mercado', outros: 'Outros' };
+const confirmado = f => f.conf >= 2;
+function fatosDe(e, tk) {
+  const vistos = new Set();
+  return [...new Set([tk, ...(e?.tickers?.split(' ') ?? [])])].flatMap(c => NOTICIAS[c] ?? [])
+    .filter(f => f.tema !== 'resumo' && !vistos.has(f.d + f.tema) && vistos.add(f.d + f.tema))
+    .sort((a, b) => b.d.localeCompare(a.d) || b.conf - a.conf);
+}
+// Dia útil anterior: notícia que sai depois do fechamento mexe com o pregão seguinte
+function diaUtilAnterior(iso) {
+  const d = new Date(`${iso}T12:00:00Z`);
+  do d.setUTCDate(d.getUTCDate() - 1); while ([0, 6].includes(d.getUTCDay()));
+  return d.toISOString().slice(0, 10);
+}
+function motivoEmpresa(e, tk, dia = D.data_precos) {
+  const dias = [dia, diaUtilAnterior(dia)];
+  return fatosDe(e, tk).filter(f => dias.includes(f.d) && confirmado(f))
+    .sort((a, b) => (a.tema === 'outros') - (b.tema === 'outros') || b.conf - a.conf)[0] ?? null;
+}
+// Motivos do mercado no dia: dólar por último (costuma ser efeito, não causa); a mesma manchete não se repete
+function motivosMercado(dia = D.data_precos) {
+  const vistos = new Set();
+  return (NOTICIAS.MERCADO ?? []).filter(f => f.d === dia && confirmado(f) && !['outros', 'resumo'].includes(f.tema))
+    .sort((a, b) => (a.tema === 'câmbio') - (b.tema === 'câmbio') || b.conf - a.conf)
+    .filter(f => !vistos.has(f.titulo) && vistos.add(f.titulo)).slice(0, 3);
+}
+const fontesTexto = f => f.fontes.map(x => x[0]).join(', ');
+const fontesLinks = f => f.fontes.map(([n, l]) => `<a href="${esc(l)}" target="_blank" rel="noopener">${esc(n)}</a>`).join(', ');
+const seloConfirmacao = f => confirmado(f)
+  ? `<span class="etiqueta etiqueta-compra" title="Publicado por ${f.conf} veículos reconhecidos no mesmo dia">${f.conf} fontes</span>`
+  : '<span class="etiqueta etiqueta-conferir" title="Menos de dois veículos reconhecidos publicaram: trate como boato até confirmar">não confirmado</span>';
+const linhaFato = (f, extra = '') => `<li class="fato"><div class="fato-topo"><span class="fato-data">${data(f.d).slice(0, 5)}</span>
+  <span class="fato-tema">${esc(TEMA_ROTULO[f.tema] ?? f.tema)}</span>${extra}${seloConfirmacao(f)}</div>
+  <a class="fato-titulo" href="${esc(f.link)}" target="_blank" rel="noopener">${esc(f.titulo)}</a>
+  <div class="fato-fontes">${f.fontes.length > 1 ? 'Fontes' : 'Fonte'}: ${fontesLinks(f)}</div></li>`;
+// Texto do movimento forte no "Merece atenção": notícia confirmada da empresa, senão o motivo do mercado
+function explicarMovimento(e, tk, v) {
+  const m = motivoEmpresa(e, tk);
+  if (m) return `Provável motivo (${TEMA_ROTULO[m.tema].toLowerCase()}): ${m.titulo} · ${fontesTexto(m)}`;
+  const mm = motivosMercado()[0], ibov = etf.BOVA11?.var_dia;
+  if (mm && ok(ibov) && Math.abs(ibov) >= 0.005 && Math.sign(ibov) === Math.sign(v))
+    return `Sem notícia confirmada da empresa; o Ibovespa ${ibov < 0 ? 'caiu' : 'subiu'} ${pctSinal(ibov)} com ${TEMA_ROTULO[mm.tema].toLowerCase()} · ${fontesTexto(mm)}`;
+  return `${e?.nome ?? ''} · nenhuma notícia confirmada por 2 fontes`;
+}
+function blocoMercadoNoticias() {
+  if (!NOTICIAS.MERCADO) return '';
+  const fatos = motivosMercado(), b = etf.BOVA11;
+  return `<div class="grafico-bloco" style="margin-bottom:12px"><h3>Por que o mercado se mexeu</h3>
+    <div class="tile-sub">Ibovespa ${b ? `<span class="${classeSinal(b.var_dia)}">${pctSinal(b.var_dia)}</span>` : ''} em ${data(D.data_precos)} ·
+      motivos citados por ao menos 2 veículos reconhecidos no dia</div>
+    ${fatos.length ? `<ul class="fatos">${fatos.map(f => linhaFato(f)).join('')}</ul>` : '<p class="vazio" style="margin:8px 0 0">Nenhum motivo confirmado por 2 fontes até agora.</p>'}</div>`;
+}
+function secaoNoticias(e, tk) {
+  const fatos = fatosDe(e, tk);
+  if (!fatos.length) return '';
+  return `<section class="ativo-secao" id="s-noticias"><h3 class="secao">Notícias</h3>
+    <div class="grafico-bloco"><div class="tile-sub">Últimos 45 dias, por dia e tema. <b>Confirmado</b>: dois ou mais veículos reconhecidos
+      publicaram o mesmo tema no mesmo dia. Uma fonte sozinha fica marcada como não confirmada. Ao lado, a variação da ação no pregão.</div>
+    <ul class="fatos">${fatos.map(f => linhaFato(f, `<span class="fato-var" data-dia="${f.d}"></span>`)).join('')}</ul></div></section>`;
+}
+// Variação da ação no pregão do dia (ou no primeiro pregão depois dele)
+function variacaoNoDia(precos, dia) {
+  const i = (precos ?? []).findIndex(p => p[0] >= dia);
+  return i > 0 ? precos[i][1] / precos[i - 1][1] - 1 : null;
+}
+
 // Itens do "Merece atenção", do mais urgente ao menos
 function itensAtencao(c) {
   if (!c) return [];
@@ -344,7 +417,7 @@ function itensAtencao(c) {
       texto: g.tese.join('; '), href: `empresa/${tk}` });
     const v = variacao(tk, 1);
     if (ok(v) && Math.abs(v) >= 0.03) itens.push({ tipo: 'movimento', ordem: 4, tk, tkLogo: e?.ticker, rotulo: v > 0 ? 'Alta forte' : 'Queda forte',
-      titulo: `${tk} ${pctSinal(v)} hoje`, texto: nome, href: `empresa/${tk}` });
+      titulo: `${tk} ${pctSinal(v)} hoje`, texto: explicarMovimento(e, tk, v), href: `empresa/${tk}` });
   }
   // Tesouro perto do gatilho de venda e dólar com movimento expressivo
   const g = REGRAS.tesouro_venda;
@@ -1443,7 +1516,8 @@ function montarAtivo(el, ticker) {
     </div>
     <div class="ativo-numeros">${numeros([['Valor de mercado', dinheiro(e.vm)], ['P/L', num(e.pl)], ['P/VP', num(e.pvp, 2)], ['Dividendos 12m', pct(e.dy)],
       ['ROE', pct(e.roe)], ['Nota geral', ok(e.nota_geral) ? `${e.nota_geral}<small>/100</small>` : '–'], ['Liquidez/dia', dinheiro(e.liquidez)]])}</div>
-    <nav class="ativo-secoes" aria-label="Seções do ativo">${SECOES_ATIVO.flatMap(x => (x[0] === 'setor' && chaveTermometro(e, ticker) ? [['termometro', 'Termômetro'], x] : [x])).map(([k, r]) => `<a href="#" data-secao="${k}">${r}</a>`).join('')}
+    <nav class="ativo-secoes" aria-label="Seções do ativo">${SECOES_ATIVO.flatMap(x => (x[0] === 'setor' && chaveTermometro(e, ticker) ? [['termometro', 'Termômetro'], x]
+      : x[0] === 'cotacao' && fatosDe(e, ticker).length ? [['noticias', 'Notícias'], x] : [x])).map(([k, r]) => `<a href="#" data-secao="${k}">${r}</a>`).join('')}
       <a class="botao botao-principal" href="#comparar/${encodeURIComponent(ticker)}">Comparar</a></nav>
 
     <section class="ativo-secao" id="s-resumo"><h3 class="secao">Resumo</h3>
@@ -1476,6 +1550,7 @@ function montarAtivo(el, ticker) {
         </dl><div id="a-eventos" class="tile-sub" style="margin-top:6px"></div></div>
       </div>
     </section>
+    ${secaoNoticias(e, ticker)}
 
     <section class="ativo-secao" id="s-cotacao"><h3 class="secao">Cotação</h3>
       <div class="grafico-bloco"><div class="mapa-topo"><div><h3>Cotação de ${esc(ticker)}</h3><div class="tile-sub" id="a-preco-sub">Carregando…</div></div>
@@ -1628,6 +1703,11 @@ function montarAtivo(el, ticker) {
       return;
     }
     desenharCotacao(dados, '1a');
+    // Variação da ação no pregão de cada notícia
+    for (const s of el.querySelectorAll('.fato-var[data-dia]')) {
+      const v = variacaoNoDia(dados.precos, s.dataset.dia);
+      if (ok(v)) s.outerHTML = `<span class="fato-var ${classeSinal(v)}" title="Variação no pregão do dia (ou no seguinte, se a notícia saiu em dia sem pregão)">${pctSinal(v)} no pregão</span>`;
+    }
     for (const b of el.querySelectorAll('[data-periodo]')) b.addEventListener('click', () => {
       for (const x of el.querySelectorAll('[data-periodo]')) x.setAttribute('aria-pressed', x === b);
       desenharCotacao(dados, b.dataset.periodo);
@@ -2059,6 +2139,17 @@ function montarMetodo(el) {
       <p>Balanços trimestrais e anuais da CVM (Dados Abertos), cotações oficiais da B3 (arquivo COTAHIST), juros,
         inflação e dólar do Banco Central e taxas do Tesouro Direto. Tudo é baixado automaticamente todo dia. O histórico
         de balanços começa em 2015; o de múltiplos, em 2020, porque antes disso a CVM não publica a quantidade de ações.</p>
+      <h3>Notícias e movimentos</h3>
+      <p>A cada atualização, o site busca as notícias das ações da carteira, das que mais se mexeram no dia e do mercado
+        (Ibovespa e dólar) no Google Notícias, com a busca dos próprios portais como reserva. Guarda só o título, o veículo, a data e o link.
+        As notícias são agrupadas por dia e tema (resultado, recomendação, fiscal e política, juros, exterior…).</p>
+      <ul>
+        <li><b>Confirmado</b> só quando dois ou mais veículos reconhecidos (InfoMoney, Valor, Estadão, Money Times, Exame, Folha, O Globo,
+          Reuters, Bloomberg e outros) publicam o mesmo tema no mesmo dia. Uma fonte sozinha aparece marcada como não confirmada.</li>
+        <li><b>Provável motivo</b> de uma queda ou alta forte é o fato confirmado da empresa no dia ou no dia útil anterior. Sem ele, o site
+          mostra o motivo confirmado do mercado, quando o Ibovespa andou na mesma direção.</li>
+        <li>É uma leitura do que a imprensa publicou, não uma prova de causa: o mercado reage antes da notícia e às vezes por motivos que ninguém escreveu.</li>
+      </ul>
       <h3>Indicadores</h3>
       <ul>
         <li><b>Últimos 12 meses:</b> lucro, receita, EBITDA e dividendos somam os quatro trimestres mais recentes.</li>

@@ -3,6 +3,7 @@
 import { writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { criarTabelasProventos, classeTicker, fatorAte } from './proventos.js';
 import { montarTermometro } from './termometro.js';
+import { montarNoticias } from './noticias.js';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { abrirDb } from './db.js';
@@ -143,6 +144,8 @@ export function exportar(db) {
     config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario, trimestres, tickers, oficial,
     // Susep, Anatel e ONS: sinais do trimestre em curso e séries de 25 meses (src/termometro.js)
     termometro: montarTermometro(db),
+    // Notícias agrupadas por dia e tema, com os veículos que publicaram (src/noticias.js)
+    noticias: montarNoticias(db),
   };
   mkdirSync(join(RAIZ, 'site'), { recursive: true });
   const texto = `window.DADOS = ${JSON.stringify(dados)};\n`;
