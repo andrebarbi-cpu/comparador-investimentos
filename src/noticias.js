@@ -5,9 +5,12 @@
 // publicam o mesmo tema no mesmo dia. Uma fonte sozinha aparece marcada como não confirmada (em 10/2026,
 // um título dizia "Porto Seguro pede cancelamento de registro" quando quem pediu foi a controlada Porto Serviço).
 // Só título, veículo, data e link são guardados: nada do texto das notícias.
+// Fonte oficial: fatos relevantes e comunicados ao mercado entregues à CVM (sistema ENET/RAD), publicados
+// pela própria empresa. Valem como confirmados sem segunda fonte e aparecem com o selo "oficial".
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { log, RAIZ } from './util.js';
+import { listar as listarEnet } from './entregas.js';
 
 const DIAS_GUARDAR = 180;
 const DIAS_EXPORTAR = 45;
@@ -26,7 +29,8 @@ const TEMAS = [
   ['resultado', /lucr|preju[ií]z|balan[cç]o|resultado|trimestr|\b[1-4]t\d{2}\b|receita|ebitda|guidance|proje[cç][oõ]es/i],
   ['dividendos', /dividend|\bjcp\b|juros sobre (o )?capital|provento|bonifica|recompra/i],
   ['recomendação', /recomenda|pre[cç]o-alvo|rebaix|corta (a )?(nota|alvo)|eleva (o )?(alvo|pre[cç]o)|outperform|underperform|overweight|underweight|neutr[oa]\b|rating/i],
-  ['operação societária', /aquisi[cç]|fus[aã]o|incorpora|\bopa\b|\bipo\b|follow-on|oferta de a[cç]|venda de (participa|ativo|fatia)|compra (de )?fatia|cancelamento de registro|reorganiza|\bcis[aã]o/i],
+  ['operação societária', /aquisi[cç]|fus[aã]o|incorpora|\bopa\b|\bipo\b|follow-on|oferta de a[cç]|venda de (participa|ativo|fatia)|compra (de )?fatia|cancelamento d[eo] registro|reorganiza|\bcis[aã]o|leil[aã]o/i],
+  ['esclarecimento', /not[ií]cia (divulgada|veiculada)|esclarecimento|resposta ao of[ií]cio|questionamento/i],
   ['regulação e justiça', /\bcvm\b|susep|\bans\b|aneel|anatel|\bcade\b|ag[eê]ncia reguladora|regula|\btcu\b|\bstf\b|tribunal|justi[cç]a|multa|processo|concess/i],
   ['fiscal e política', /fiscal|arcabou[cç]o|haddad|\blula\b|governo|congresso|c[aâ]mara|senado|elei[cç]|imposto|tribut|\biof\b|or[cç]amento|gastos|precat[oó]rio|ministro|presidente da rep/i],
   ['juros e inflação', /selic|copom|juros|infla[cç]|\bipca\b|banco central|\bfed\b|treasur|powell|galípolo|galipolo/i],
@@ -137,6 +141,32 @@ function codigosParaBuscar(db, config) {
   return [...new Set([...carteira, ...acompanhar, ...movidas])].map(tk => ({ tk, palavras: palavrasDe(tk, nomes.get(tk)) }));
 }
 
+// Fatos relevantes e comunicados ao mercado de todas as empresas com nota no site. Comunicados de rotina
+// (participação acionária, negociação de administradores, calendário, apresentações) ficam de fora.
+const CATEGORIAS_CVM = [['IPE_4_-1_-1', 'CVM · fato relevante'], ['IPE_6_-1_-1', 'CVM · comunicado']];
+const ROTINA_CVM = /participa[cç][aã]o acion[aá]ria relevante|negocia[cç][oõ]es de administradores|valores mobili[aá]rios (negociados|detidos)|calend[aá]rio de eventos|apresenta[cç][aã]o (de resultados|institucional)|teleconfer|webcast|reapresenta|release de resultados|aviso aos debenturistas|deb[eê]nture|call de resultados|videoconfer|guia de modelagem|per[ií]odo de sil[eê]ncio|report on|relat[oó]rio de an[aá]lise|reuni[aã]o p[uú]blica|chamamento/i;
+// Versões em inglês repetem o documento em português
+const TRADUCAO = /ingl[eê]s|english|\(eng\)/i;
+const URL_DOC_CVM = p => `https://www.rad.cvm.gov.br/ENET/frmExibirArquivoIPEExterno.aspx?NumeroProtocoloEntrega=${p}`;
+async function atualizarCvm(db, ins) {
+  const porCvm = new Map(db.prepare(`SELECT CAST(e.cd_cvm AS INTEGER) cd, i.ticker FROM indicadores i JOIN empresas e ON e.cnpj = i.cnpj`)
+    .all().map(r => [String(r.cd), r.ticker]));
+  const temCvm = db.prepare("SELECT 1 FROM noticias WHERE fonte LIKE 'CVM%' LIMIT 1").get();
+  const ate = new Date(), de = new Date(Date.now() - (temCvm ? 7 : DIAS_EXPORTAR) * 864e5);
+  let n = 0;
+  for (const [categoria, fonte] of CATEGORIAS_CVM) {
+    for (const c of await listarEnet(categoria, de, ate)) {
+      const tk = porCvm.get(String(Number((c[0] ?? '').replace(/\D/g, ''))));
+      const ent = /^(\d{4})(\d{2})(\d{2})\D.*?(\d{2}:\d{2})?$/.exec(c[6] ?? '');
+      const titulo = (c[11] || c[4] || c[3] || '').replace(/\s*-\s*$/, '').trim();
+      if (!tk || !ent || !c.protocoloIpe || !titulo) continue;
+      if (TRADUCAO.test(titulo) || (fonte.endsWith('comunicado') && ROTINA_CVM.test(`${c[3]} ${titulo}`))) continue;
+      n += ins.run(tk, `cvm|${c.protocoloIpe}`, `${ent[1]}-${ent[2]}-${ent[3]}`, ent[4] ?? '', fonte, titulo, URL_DOC_CVM(c.protocoloIpe), temaDe(titulo)).changes;
+    }
+  }
+  return n;
+}
+
 export async function atualizarNoticias(db) {
   const config = JSON.parse(readFileSync(join(RAIZ, 'config', 'carteiras.json'), 'utf8'));
   criarTabelaNoticias(db);
@@ -164,8 +194,10 @@ export async function atualizarNoticias(db) {
     }
     await new Promise(res => setTimeout(res, 350));
   }
+  let cvm = 0;
+  try { cvm = await atualizarCvm(db, ins); } catch (e) { log('Fatos relevantes da CVM indisponíveis agora:', e.message); }
   db.prepare(`DELETE FROM noticias WHERE data < date('now', '-${DIAS_GUARDAR} day')`).run();
-  log(`Notícias: ${buscas.length} buscas, ${novas} novas${viaPortais ? `, ${viaPortais} pela reserva dos portais` : ''}${falhas ? `, ${falhas} sem resultado` : ''}`);
+  log(`Notícias: ${buscas.length} buscas, ${novas} novas${viaPortais ? `, ${viaPortais} pela reserva dos portais` : ''}${falhas ? `, ${falhas} sem resultado` : ''}; CVM: ${cvm} documentos novos`);
   if (falhas === buscas.length) throw new Error('nenhuma busca de notícias respondeu');
 }
 
@@ -185,10 +217,14 @@ export function montarNoticias(db) {
     const { chave, data: d, tema } = itens[0];
     const porFonte = new Map();
     for (const n of itens) if (!porFonte.has(n.fonte)) porFonte.set(n.fonte, n);
-    const fontes = [...porFonte.values()].sort((a, b) => reconhecido(b.fonte) - reconhecido(a.fonte));
-    const principal = fontes[0];
+    // Documento da CVM primeiro na lista de fontes; o título exibido é o da imprensa, quando houver
+    // (o assunto do fato relevante costuma ser seco: "FR 07/26 - Deslistagem...")
+    const ehCvm = n => n.fonte.startsWith('CVM');
+    const fontes = [...porFonte.values()].sort((a, b) => ehCvm(b) - ehCvm(a) || reconhecido(b.fonte) - reconhecido(a.fonte));
+    const principal = fontes.find(n => !ehCvm(n) && reconhecido(n.fonte)) ?? fontes[0];
+    const oficial = fontes.some(n => n.fonte === 'CVM · fato relevante') ? 'fato relevante' : fontes.some(ehCvm) ? 'comunicado' : undefined;
     (saida[chave] ??= []).push({
-      d, tema, titulo: principal.titulo, link: principal.link,
+      d, tema, titulo: principal.titulo, link: principal.link, of: oficial,
       fontes: fontes.slice(0, 4).map(n => [n.fonte, n.link]), conf: fontes.filter(n => reconhecido(n.fonte)).length,
     });
   }

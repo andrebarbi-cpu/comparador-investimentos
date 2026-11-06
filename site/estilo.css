@@ -553,7 +553,7 @@ td.melhor::before { content: "● "; color: var(--destaque); font-size: .7em; ve
 .fato-topo { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: .74rem; color: var(--texto-3); }
 .fato-data { font-weight: 600; color: var(--texto-2); }
 .fato-tema { text-transform: uppercase; letter-spacing: .06em; font-size: .64rem; font-weight: 600; }
-.fato-topo .etiqueta { margin-left: auto; }
+.fato-selos { margin-left: auto; display: inline-flex; gap: 4px; }
 .fato-var { font-weight: 600; }
 .fato-titulo { color: var(--texto); text-decoration: none; font-weight: 550; font-size: .88rem; line-height: 1.35; }
 .fato-titulo:hover { text-decoration: underline; }

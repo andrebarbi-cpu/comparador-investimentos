@@ -332,12 +332,14 @@ function blocosMercado() {
 
 // ---------- Notícias ligadas aos movimentos ----------
 // Fatos agrupados por dia e tema (src/noticias.js). Confirmado = dois ou mais veículos reconhecidos
-// publicaram o mesmo tema no mesmo dia; uma fonte sozinha aparece, mas nunca vira "motivo".
+// publicaram o mesmo tema no mesmo dia, ou a própria empresa publicou na CVM (fato relevante ou
+// comunicado: f.of). Uma fonte de imprensa sozinha aparece, mas nunca vira "motivo".
 const NOTICIAS = D.noticias ?? {};
 const TEMA_ROTULO = { resultado: 'Resultado', dividendos: 'Dividendos', 'recomendação': 'Recomendação de analistas',
-  'operação societária': 'Operação societária', 'regulação e justiça': 'Regulação e justiça', 'fiscal e política': 'Fiscal e política',
-  'juros e inflação': 'Juros e inflação', exterior: 'Exterior', commodities: 'Commodities', 'câmbio': 'Câmbio', resumo: 'Resumo do mercado', outros: 'Outros' };
-const confirmado = f => f.conf >= 2;
+  'operação societária': 'Operação societária', esclarecimento: 'Esclarecimento da empresa', 'regulação e justiça': 'Regulação e justiça',
+  'fiscal e política': 'Fiscal e política', 'juros e inflação': 'Juros e inflação', exterior: 'Exterior', commodities: 'Commodities',
+  'câmbio': 'Câmbio', resumo: 'Resumo do mercado', outros: 'Outros' };
+const confirmado = f => f.conf >= 2 || !!f.of;
 function fatosDe(e, tk) {
   const vistos = new Set();
   return [...new Set([tk, ...(e?.tickers?.split(' ') ?? [])])].flatMap(c => NOTICIAS[c] ?? [])
@@ -352,8 +354,9 @@ function diaUtilAnterior(iso) {
 }
 function motivoEmpresa(e, tk, dia = D.data_precos) {
   const dias = [dia, diaUtilAnterior(dia)];
-  return fatosDe(e, tk).filter(f => dias.includes(f.d) && confirmado(f))
-    .sort((a, b) => (a.tema === 'outros') - (b.tema === 'outros') || b.conf - a.conf)[0] ?? null;
+  // Comunicado de rotina da CVM ("renúncia de conselheiro") sem eco na imprensa não explica movimento
+  return fatosDe(e, tk).filter(f => dias.includes(f.d) && confirmado(f) && !(f.of === 'comunicado' && f.conf < 2 && f.tema === 'outros'))
+    .sort((a, b) => (a.tema === 'outros') - (b.tema === 'outros') || b.conf - a.conf || !!b.of - !!a.of)[0] ?? null;
 }
 // Motivos do mercado no dia: dólar por último (costuma ser efeito, não causa); a mesma manchete não se repete
 function motivosMercado(dia = D.data_precos) {
@@ -364,11 +367,14 @@ function motivosMercado(dia = D.data_precos) {
 }
 const fontesTexto = f => f.fontes.map(x => x[0]).join(', ');
 const fontesLinks = f => f.fontes.map(([n, l]) => `<a href="${esc(l)}" target="_blank" rel="noopener">${esc(n)}</a>`).join(', ');
-const seloConfirmacao = f => confirmado(f)
-  ? `<span class="etiqueta etiqueta-compra" title="Publicado por ${f.conf} veículos reconhecidos no mesmo dia">${f.conf} fontes</span>`
-  : '<span class="etiqueta etiqueta-conferir" title="Menos de dois veículos reconhecidos publicaram: trate como boato até confirmar">não confirmado</span>';
+const seloConfirmacao = f => [
+  f.of && `<span class="etiqueta etiqueta-movimento" title="Documento entregue pela própria empresa à CVM (${f.of})">oficial · CVM</span>`,
+  f.conf >= 2 ? `<span class="etiqueta etiqueta-compra" title="Publicado por ${f.conf} veículos reconhecidos no mesmo dia">${f.conf} fontes</span>`
+    : !f.of && '<span class="etiqueta etiqueta-conferir" title="Menos de dois veículos reconhecidos publicaram: trate como boato até confirmar">não confirmado</span>',
+].filter(Boolean).join('');
+const selosFato = f => `<span class="fato-selos">${seloConfirmacao(f)}</span>`;
 const linhaFato = (f, extra = '') => `<li class="fato"><div class="fato-topo"><span class="fato-data">${data(f.d).slice(0, 5)}</span>
-  <span class="fato-tema">${esc(TEMA_ROTULO[f.tema] ?? f.tema)}</span>${extra}${seloConfirmacao(f)}</div>
+  <span class="fato-tema">${esc(TEMA_ROTULO[f.tema] ?? f.tema)}</span>${extra}${selosFato(f)}</div>
   <a class="fato-titulo" href="${esc(f.link)}" target="_blank" rel="noopener">${esc(f.titulo)}</a>
   <div class="fato-fontes">${f.fontes.length > 1 ? 'Fontes' : 'Fonte'}: ${fontesLinks(f)}</div></li>`;
 // Texto do movimento forte no "Merece atenção": notícia confirmada da empresa, senão o motivo do mercado
@@ -2146,6 +2152,9 @@ function montarMetodo(el) {
       <ul>
         <li><b>Confirmado</b> só quando dois ou mais veículos reconhecidos (InfoMoney, Valor, Estadão, Money Times, Exame, Folha, O Globo,
           Reuters, Bloomberg e outros) publicam o mesmo tema no mesmo dia. Uma fonte sozinha aparece marcada como não confirmada.</li>
+        <li><b>Oficial · CVM:</b> fatos relevantes e comunicados ao mercado que a própria empresa entrega à CVM (sistema ENET) valem como
+          confirmados sozinhos, com link para o documento. Comunicados de rotina (convite de teleconferência, versão em inglês,
+          negociação de administradores) ficam de fora.</li>
         <li><b>Provável motivo</b> de uma queda ou alta forte é o fato confirmado da empresa no dia ou no dia útil anterior. Sem ele, o site
           mostra o motivo confirmado do mercado, quando o Ibovespa andou na mesma direção.</li>
         <li>É uma leitura do que a imprensa publicou, não uma prova de causa: o mercado reage antes da notícia e às vezes por motivos que ninguém escreveu.</li>

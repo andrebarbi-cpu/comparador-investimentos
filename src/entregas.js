@@ -18,7 +18,8 @@ export function criarTabelaEntregas(db) {
   if (!cols.includes('seq')) db.exec('ALTER TABLE entregas ADD COLUMN seq TEXT; ALTER TABLE entregas ADD COLUMN versao INTEGER; ALTER TABLE entregas ADD COLUMN protocolo TEXT');
 }
 
-async function listar(categoria, de, ate) {
+// Também usada para fatos relevantes e comunicados ao mercado (src/noticias.js)
+export async function listar(categoria, de, ate) {
   const corpo = { dataDe: br(de), dataAte: br(ate), empresa: '', setorAtividade: '-1', categoriaEmissor: '-1',
     situacaoEmissor: '-1', tipoParticipante: '1', dataReferencia: '', categoria, periodo: '2', horaIni: '', horaFim: '',
     palavraChave: '', ultimaDtRef: 'false', tipoEmpresa: '0', token: '', versaoCaptcha: '' };
@@ -36,6 +37,8 @@ async function listar(categoria, de, ate) {
         const campos = reg.split('$&').map(semTags);
         const dl = /OpenDownloadDocumentos\('(\d+)','(\d+)','([^']+)'/.exec(reg);
         campos.download = dl ? { seq: dl[1], versao: Number(dl[2]), protocolo: dl[3] } : null;
+        // Fatos relevantes e comunicados: o link de visualização traz o protocolo de entrega
+        campos.protocoloIpe = /NumeroProtocoloEntrega=(\d+)/.exec(reg)?.[1] ?? null;
         return campos;
       });
     } catch (e) {
