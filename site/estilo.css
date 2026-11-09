@@ -559,3 +559,18 @@ td.melhor::before { content: "● "; color: var(--destaque); font-size: .7em; ve
 .fato-titulo:hover { text-decoration: underline; }
 .fato-fontes { font-size: .74rem; color: var(--texto-3); }
 .fato-fontes a { color: var(--texto-2); }
+
+/* ---------- Simulador de carteira ---------- */
+.simc-tabela td, .simc-tabela th { vertical-align: middle; }
+.simc-tabela tfoot td { font-weight: 600; border-top: 1px solid var(--linha); }
+.simc-taxa { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; font-size: .8rem; color: var(--texto-3); }
+.simc-taxa .campo { width: 80px; }
+.simc-tirar { border: 0; background: transparent; color: var(--texto-3); font-size: 1.2rem; line-height: 1; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+.simc-tirar:hover { color: var(--negativo-col); background: var(--superficie-2); }
+.simc-adicionar #simc-busca { flex: 1 1 220px; max-width: 300px; }
+.simc-correl { width: auto; }
+.simc-correl td { text-align: center; min-width: 72px; }
+.simc-correl .cor-pos { background: color-mix(in srgb, var(--serie-2) var(--c), transparent); }
+.simc-correl .cor-neg { background: color-mix(in srgb, var(--serie-1) var(--c), transparent); }
+.simc-rebal { flex-wrap: wrap; max-width: 100%; }
+.simc-rebal select { max-width: 100%; min-width: 0; }

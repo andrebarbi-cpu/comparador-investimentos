@@ -134,14 +134,16 @@ export function exportar(db) {
 
   // Arquivos por ativo e, de cada código (inclusive os secundários, como ALUP4 e ALUP3), o último
   // preço e as variações do dia e de 12 meses: a página do ativo usa o preço do código aberto
-  const tickers = exportarAtivos(db, empresas);
+  const tickers = exportarAtivos(db, empresas, etfs.map(e => e.ticker));
 
   const dados = {
     gerado_em: new Date().toISOString(),
     data_precos: dataPrecos,
     precos_parciais: temParcial ? { hora: horaParcial } : null,
     macro, tesouro, empresas, historico, anuais, etfs, series,
-    config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario, trimestres, tickers, oficial,
+    config, precos, tesouro_series: tesouroSeries, cdi_diario: cdiDiario, trimestres,
+    // IPCA de cada mês (%), para o simulador de carteira corrigir pela inflação
+    ipca_mensal: db.prepare("SELECT substr(data,1,7) mes, valor FROM macro WHERE serie = 'ipca' ORDER BY data").all().map(r => [r.mes, r.valor]), tickers, oficial,
     // Susep, Anatel e ONS: sinais do trimestre em curso e séries de 25 meses (src/termometro.js)
     termometro: montarTermometro(db),
     // Notícias agrupadas por dia e tema, com os veículos que publicaram (src/noticias.js)
@@ -153,13 +155,13 @@ export function exportar(db) {
   log(`Exportado site/dados.js (${(texto.length / 1024).toFixed(0)} KB)`);
 }
 
-// Um arquivo por código de negociação (site/ativos/ITSA4.json), lido pela página do ativo só quando
+// Um arquivo por código de negociação (site/ativos/ITSA4.json; os ETFs também, para o simulador de carteira), lido pela página do ativo só quando
 // ela abre: cotação diária desde 2016 e proventos, ajustados por desdobramento, grupamento e bonificação.
 //   precos: [data, fechamento ajustado]
 //   proventos: [data com, pagamento, tipo, valor como declarado, valor ajustado, preço na data com]
 //   eventos: [data com, tipo, fator]
 // Devolve { código: [último preço, variação do dia, variação de 12 meses, data] } (ajustados por eventos)
-function exportarAtivos(db, empresas) {
+function exportarAtivos(db, empresas, etfs = []) {
   criarTabelasProventos(db);
   const pasta = join(RAIZ, 'site', 'ativos');
   rmSync(pasta, { recursive: true, force: true });
@@ -170,7 +172,8 @@ function exportarAtivos(db, empresas) {
   const TIPO = { DIVIDENDO: 'Dividendo', 'JRS CAP PROPRIO': 'JCP', RENDIMENTO: 'Rendimento', 'REST CAP DIN': 'Restituição de capital' };
   let n = 0, bytes = 0;
   const resumo = {};
-  for (const e of empresas) for (const tk of e.tickers.split(' ')) {
+  const codigos = [...empresas.flatMap(e => e.tickers.split(' ')), ...etfs];
+  for (const tk of new Set(codigos)) {
     const precos = cot.all(tk);
     if (precos.length < 2) continue;
     const codigo = tk.slice(0, 4), classe = classeTicker(tk);

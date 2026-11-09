@@ -198,7 +198,7 @@ function montarBusca() {
 }
 
 // ---------- Navegação ----------
-const ABAS = { inicio: montarInicio, ativo: montarAtivo, oportunidades: montarOportunidades, carteiras: montarCarteiras, ranking: montarRanking, comparar: montarComparar, etfs: montarEtfs, metodo: montarMetodo };
+const ABAS = { inicio: montarInicio, ativo: montarAtivo, oportunidades: montarOportunidades, carteiras: montarCarteiras, ranking: montarRanking, comparar: montarComparar, etfs: montarEtfs, simulador: montarSimulador, metodo: montarMetodo };
 const montadas = new Set();
 let abaAtual = null;
 
@@ -2193,6 +2193,467 @@ function montarEtfs(el) {
   desenhar();
 }
 
+// ---------- Simulador de carteira ----------
+// Carteira imaginária com pesos-alvo. Ações e ETFs andam pelo fechamento diário ajustado e pelos proventos
+// (ativos/TICKER.json; o provento entra no primeiro pregão depois da data com). A renda fixa rende na curva,
+// sem a oscilação de preço do Tesouro: % do CDI, IPCA + taxa (IPCA do mês espalhado pelos dias úteis) e
+// prefixado. Percorre os dias úteis do Banco Central e os pregões, e compara com o mesmo dinheiro, nas mesmas
+// datas, no CDI e no Ibovespa (BOVA11), e com o total aportado corrigido pela inflação. A rentabilidade é a
+// da cota (tira o efeito dos aportes), a mesma conta dos fundos. Sem imposto, taxas nem corretagem.
+const CHAVE_SIM = 'comparador.simulador.v1';
+const RF_SIM = {
+  cdi: { nome: 'Renda fixa pós (CDI)', antes: '', depois: '% do CDI', padrao: 100 },
+  ipca: { nome: 'Renda fixa IPCA+', antes: 'IPCA +', depois: '% a.a.', padrao: 6 },
+  pre: { nome: 'Prefixado', antes: '', depois: '% a.a.', padrao: 11 },
+};
+const PERIODOS_SIM = [[1, '1 ano'], [3, '3 anos'], [5, '5 anos'], [10, '10 anos'], [0, 'Desde 2016']];
+const REBAL_SIM = {
+  aporte: 'Aportes vão para o que está abaixo do peso',
+  nunca: 'Nunca: aportes divididos pelos pesos',
+  anual: 'Todo ano: vende o que passou do peso e compra o resto',
+};
+const ativosSim = [...new Set([...D.etfs.map(e => e.ticker), ...listaTickers])];
+const nomeSim = tk => (etf[tk] ? `ETF · ${ETF_INFO[tk]?.desc ?? etf[tk].nome ?? ''}` : porTicker.get(tk)?.nome ?? '');
+const rotuloItemSim = i => (i.tipo === 'ativo' ? i.tk : `${RF_SIM[i.tipo].antes} ${num(i.taxa, i.tipo === 'cdi' ? 0 : 2)}${RF_SIM[i.tipo].depois}`.trim());
+const SIM_PADRAO = {
+  itens: [{ tipo: 'ipca', taxa: 6, peso: 35 }, { tipo: 'ativo', tk: 'IVVB11', peso: 25 }, { tipo: 'ativo', tk: 'BOVA11', peso: 30 }, { tipo: 'cdi', taxa: 100, peso: 10 }],
+  anos: 5, inicial: 10000, mensal: 1000, rebal: 'aporte', reinveste: true, corrige: true,
+};
+// O que vem do armazenamento passa pelo mesmo filtro: só códigos conhecidos e números válidos
+function limparSim(s) {
+  const itens = (Array.isArray(s?.itens) ? s.itens : []).slice(0, 40).map(i => {
+    const peso = numeroValido(i?.peso) ?? 0;
+    if (i?.tipo === 'ativo') return ativosSim.includes(i.tk) ? { tipo: 'ativo', tk: i.tk, peso } : null;
+    return RF_SIM[i?.tipo] ? { tipo: i.tipo, taxa: numeroValido(i.taxa) ?? RF_SIM[i.tipo].padrao, peso } : null;
+  }).filter(Boolean);
+  return {
+    itens, anos: PERIODOS_SIM.some(p => p[0] === s?.anos) ? s.anos : 5,
+    inicial: numeroValido(s?.inicial) ?? 10000, mensal: numeroValido(s?.mensal) ?? 1000,
+    rebal: REBAL_SIM[s?.rebal] ? s.rebal : 'aporte', reinveste: s?.reinveste !== false, corrige: s?.corrige !== false,
+  };
+}
+let simCfg = (() => {
+  try { const s = limparSim(JSON.parse(localStorage.getItem(CHAVE_SIM))); if (s.itens.length) return s; } catch { /* sem armazenamento */ }
+  return limparSim(SIM_PADRAO);
+})();
+const salvarSim = () => { try { localStorage.setItem(CHAVE_SIM, JSON.stringify(simCfg)); } catch { /* segue sem salvar */ } };
+let simVez = 0, simTimer = null;
+const agendarSim = () => { salvarSim(); clearTimeout(simTimer); simTimer = setTimeout(rodarSim, 300); };
+
+function montarSimulador(el) {
+  el.innerHTML = `
+    <h2>Simulador de carteira</h2>
+    <p class="intro">Monte uma carteira imaginária e veja como ela teria se saído no passado, com aporte todo mês, contra o CDI,
+      o Ibovespa e a inflação. Ações e ETFs andam pelo fechamento diário e pelos proventos; a renda fixa rende na curva, sem a
+      oscilação de preço que o Tesouro tem no caminho. Não desconta imposto, taxas nem corretagem.</p>
+    <div class="grafico-bloco">
+      <h3>Composição</h3>
+      <div id="simc-itens"></div>
+      <div class="filtros simc-adicionar">
+        <input class="campo" id="simc-busca" list="simc-lista" placeholder="Adicionar ação ou ETF (ex.: ITSA4)" autocomplete="off" aria-label="Adicionar ação ou ETF">
+        <datalist id="simc-lista">${ativosSim.map(tk => `<option value="${tk}">${esc(nomeSim(tk))}</option>`).join('')}</datalist>
+        ${Object.entries(RF_SIM).map(([k, r]) => `<button class="botao" data-rf="${k}">+ ${r.nome}</button>`).join('')}
+      </div>
+      <div class="filtros">
+        <button class="botao" id="simc-minha">Usar a minha carteira</button>
+        <button class="botao" id="simc-iguais">Pesos iguais</button>
+        <button class="botao" id="simc-limpar">Começar do zero</button>
+        <span class="contagem" id="simc-aviso"></span>
+      </div>
+      <div class="filtros simulador-campos">
+        <span class="segmentado" role="group" aria-label="Período">${PERIODOS_SIM.map(([a, r]) => `<button data-anos="${a}" aria-pressed="${a === simCfg.anos}">${r}</button>`).join('')}</span>
+        <label>Aporte inicial <input class="campo" id="simc-inicial" type="number" min="0" step="1000" inputmode="decimal" value="${simCfg.inicial}" style="width:120px"></label>
+        <label>Aporte mensal <input class="campo" id="simc-mensal" type="number" min="0" step="100" inputmode="decimal" value="${simCfg.mensal}" style="width:110px"></label>
+      </div>
+      <div class="filtros simulador-campos" style="margin-bottom:0">
+        <label class="simc-rebal">Rebalancear <select id="simc-rebal">${Object.entries(REBAL_SIM).map(([k, r]) => `<option value="${k}" ${k === simCfg.rebal ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
+        <label><input type="checkbox" id="simc-reinveste" ${simCfg.reinveste ? 'checked' : ''}> Reinvestir os proventos</label>
+        <label><input type="checkbox" id="simc-corrige" ${simCfg.corrige ? 'checked' : ''}> Aporte mensal sobe com a inflação</label>
+      </div>
+    </div>
+    <div id="simc-resultado"></div>`;
+
+  const itensEl = $('#simc-itens', el);
+  itensEl.addEventListener('input', ev => {
+    const t = ev.target, k = Number(t.dataset.peso ?? t.dataset.taxa);
+    if (!simCfg.itens[k]) return;
+    const v = Math.max(0, Number(t.value) || 0);
+    if (t.dataset.peso != null) { simCfg.itens[k].peso = v; atualizarSomaSim(); } else simCfg.itens[k].taxa = v;
+    agendarSim();
+  });
+  itensEl.addEventListener('click', ev => {
+    const b = ev.target.closest('[data-tirar]');
+    if (!b) return;
+    simCfg.itens.splice(Number(b.dataset.tirar), 1);
+    desenharItensSim(); agendarSim();
+  });
+  const busca = $('#simc-busca', el);
+  const adicionar = () => {
+    const tk = busca.value.trim().toUpperCase();
+    if (!ativosSim.includes(tk)) return;
+    if (!simCfg.itens.some(i => i.tk === tk)) simCfg.itens.push({ tipo: 'ativo', tk, peso: 10 });
+    busca.value = '';
+    desenharItensSim(); agendarSim();
+  };
+  busca.addEventListener('change', adicionar);
+  busca.addEventListener('keydown', ev => { if (ev.key === 'Enter') adicionar(); });
+  for (const b of el.querySelectorAll('[data-rf]')) b.addEventListener('click', () => {
+    simCfg.itens.push({ tipo: b.dataset.rf, taxa: RF_SIM[b.dataset.rf].padrao, peso: 10 });
+    desenharItensSim(); agendarSim();
+  });
+  $('#simc-minha', el).addEventListener('click', () => {
+    const itens = carteiraParaSim();
+    if (!itens.length) { $('#simc-aviso').textContent = 'Preencha as quantidades na aba Carteira para usar a sua carteira aqui.'; return; }
+    simCfg.itens = itens;
+    $('#simc-aviso').textContent = 'Pesos de hoje da sua carteira. O Tesouro entra como IPCA + a taxa de hoje, na curva; o CDB, pelo % do CDI médio.';
+    desenharItensSim(); agendarSim();
+  });
+  $('#simc-iguais', el).addEventListener('click', () => {
+    const n = simCfg.itens.length;
+    for (const i of simCfg.itens) i.peso = Math.round(1000 / n) / 10;
+    desenharItensSim(); agendarSim();
+  });
+  $('#simc-limpar', el).addEventListener('click', () => { simCfg.itens = []; $('#simc-aviso').textContent = ''; desenharItensSim(); agendarSim(); });
+  for (const b of el.querySelectorAll('[data-anos]')) b.addEventListener('click', () => {
+    simCfg.anos = Number(b.dataset.anos);
+    el.querySelectorAll('[data-anos]').forEach(x => x.setAttribute('aria-pressed', x === b));
+    agendarSim();
+  });
+  for (const id of ['inicial', 'mensal']) $(`#simc-${id}`, el).addEventListener('input', ev => { simCfg[id] = Math.max(0, Number(ev.target.value) || 0); agendarSim(); });
+  $('#simc-rebal', el).addEventListener('change', ev => { simCfg.rebal = ev.target.value; agendarSim(); });
+  for (const id of ['reinveste', 'corrige']) $(`#simc-${id}`, el).addEventListener('change', ev => { simCfg[id] = ev.target.checked; agendarSim(); });
+  desenharItensSim();
+  rodarSim();
+}
+
+function desenharItensSim() {
+  const el = $('#simc-itens');
+  if (!simCfg.itens.length) { el.innerHTML = '<p class="vazio">Adicione ações, ETFs ou renda fixa abaixo.</p>'; return; }
+  el.innerHTML = `<div class="tabela-caixa" style="max-height:none"><table class="simc-tabela">
+    <thead><tr><th class="esq">Ativo</th><th>Peso (%)</th><th></th></tr></thead><tbody>
+    ${simCfg.itens.map((i, k) => `<tr style="cursor:default"><td class="esq">${i.tipo === 'ativo'
+      ? `<b>${esc(i.tk)}</b><span class="nome" style="display:block;white-space:normal">${esc(nomeSim(i.tk))}</span>`
+      : `<b>${RF_SIM[i.tipo].nome}</b><span class="simc-taxa">${RF_SIM[i.tipo].antes}
+          <input class="campo" type="number" min="0" step="${i.tipo === 'cdi' ? 5 : 0.25}" inputmode="decimal" data-taxa="${k}" value="${i.taxa}" aria-label="Taxa">
+          ${RF_SIM[i.tipo].depois}</span>`}</td>
+      <td><input class="campo" type="number" min="0" max="100" step="any" inputmode="decimal" data-peso="${k}" value="${i.peso}" aria-label="Peso de ${esc(rotuloItemSim(i))}" style="width:84px"></td>
+      <td><button class="simc-tirar" data-tirar="${k}" aria-label="Tirar ${esc(rotuloItemSim(i))}" title="Tirar">×</button></td></tr>`).join('')}
+    </tbody><tfoot><tr><td class="esq">Soma</td><td id="simc-soma"></td><td></td></tr></tfoot></table></div>
+    <p class="tile-sub" id="simc-soma-aviso" style="margin:6px 0 0"></p>`;
+  atualizarSomaSim();
+}
+function atualizarSomaSim() {
+  const el = $('#simc-soma');
+  if (!el) return;
+  const soma = simCfg.itens.reduce((s, i) => s + i.peso, 0), fora = Math.abs(soma - 100) > 0.05;
+  el.textContent = `${num(soma, soma % 1 ? 1 : 0)}%`;
+  el.className = fora ? 'negativo' : '';
+  $('#simc-soma-aviso').textContent = fora && soma > 0 ? 'Os pesos não somam 100%: a simulação usa a proporção entre eles.' : '';
+}
+
+// Pesos de hoje da carteira preenchida na aba Carteira (o CDB só na parte acima da reserva)
+function carteiraParaSim() {
+  const c = CARTEIRAS[0];
+  if (!c) return [];
+  const itens = [];
+  for (const tk of [...(c.acoes ?? []), ...(c.etfs ?? [])]) {
+    const v = (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0);
+    if (v > 0 && ativosSim.includes(tk)) itens.push({ tipo: 'ativo', tk, v });
+  }
+  for (const t of c.tesouro ?? []) {
+    const i = infoTesouro(t), v = (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (i.pu ?? 0);
+    if (v > 0 && ok(i.taxa)) itens.push({ tipo: 'ipca', taxa: Math.round(i.taxa * 100) / 100, v });
+  }
+  if (c.cdb) {
+    const municao = pesosClasses(c).valores.municao;
+    const cdbs = local.cdbs.filter(x => x.valor && x.data);
+    const base = cdbs.reduce((s, x) => s + x.valor, 0);
+    if (municao > 0) itens.push({ tipo: 'cdi', taxa: base ? Math.round(cdbs.reduce((s, x) => s + x.valor * x.pct, 0) / base) : 100, v: municao });
+  }
+  const total = itens.reduce((s, i) => s + i.v, 0);
+  const res = itens.sort((a, b) => b.v - a.v).map(({ v, ...i }) => ({ ...i, peso: Math.round(1000 * v / total) / 10 }));
+  // A sobra do arredondamento vai para o maior, para a soma fechar em 100%
+  if (res.length) res[0].peso = Math.round(10 * (res[0].peso + 100 - res.reduce((s, i) => s + i.peso, 0))) / 10;
+  return res;
+}
+
+async function rodarSim() {
+  const vez = ++simVez, out = $('#simc-resultado');
+  const itens = simCfg.itens.filter(i => i.peso > 0);
+  const soma = itens.reduce((s, i) => s + i.peso, 0);
+  if (!soma) { out.innerHTML = '<p class="vazio" style="margin-top:12px">Dê peso a pelo menos um ativo.</p>'; return; }
+  if (!simCfg.inicial && !simCfg.mensal) { out.innerHTML = '<p class="vazio" style="margin-top:12px">Informe um aporte inicial ou mensal.</p>'; return; }
+  if (!out.children.length) out.innerHTML = '<p class="vazio" style="margin-top:12px">Calculando…</p>';
+  const tks = [...new Set([...itens.filter(i => i.tipo === 'ativo').map(i => i.tk), 'BOVA11'])];
+  const arqs = await Promise.all(tks.map(carregarAtivo));
+  if (vez !== simVez) return;
+  const dados = Object.fromEntries(tks.map((tk, k) => [tk, arqs[k]?.precos?.length ? arqs[k] : null]));
+  const faltam = itens.filter(i => i.tipo === 'ativo' && !dados[i.tk]).map(i => i.tk);
+  if (faltam.length) { out.innerHTML = `<p class="vazio" style="margin-top:12px">Não consegui carregar a cotação de ${esc(faltam.join(', '))}.</p>`; return; }
+  desenharResultadoSim(simularCarteira(itens.map(i => ({ ...i, w: i.peso / soma })), dados));
+}
+
+const isoMais = (iso, anos = 0, dias = 0) => {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCFullYear(d.getUTCFullYear() + anos);
+  d.setUTCDate(d.getUTCDate() + dias);
+  return d.toISOString().slice(0, 10);
+};
+// Maior queda de uma série [data, índice]: tamanho, pico, fundo e quando voltou ao pico
+function maiorQuedaSerie(pts) {
+  let pico = pts[0], q = { queda: 0, pico: pts[0][0], fundo: pts[0][0], volta: null };
+  for (const p of pts) {
+    if (p[1] >= pico[1]) {
+      if (q.queda < 0 && !q.volta && q.pico === pico[0]) q.volta = p[0];
+      pico = p;
+    } else if (p[1] / pico[1] - 1 < q.queda) q = { queda: p[1] / pico[1] - 1, pico: pico[0], fundo: p[0], volta: null };
+  }
+  return q;
+}
+const volAnual = vals => {
+  const r = [];
+  for (let k = 1; k < vals.length; k++) if (vals[k - 1] > 0) r.push(Math.log(vals[k] / vals[k - 1]));
+  if (r.length < 10) return null;
+  const m = r.reduce((s, x) => s + x, 0) / r.length;
+  return Math.sqrt(r.reduce((s, x) => s + (x - m) ** 2, 0) / (r.length - 1) * 252);
+};
+function correlacao(a, b) {
+  const n = a.length;
+  if (n < 6) return null;
+  const ma = a.reduce((s, x) => s + x, 0) / n, mb = b.reduce((s, x) => s + x, 0) / n;
+  let c = 0, va = 0, vb = 0;
+  for (let k = 0; k < n; k++) { c += (a[k] - ma) * (b[k] - mb); va += (a[k] - ma) ** 2; vb += (b[k] - mb) ** 2; }
+  return va && vb ? c / Math.sqrt(va * vb) : null;
+}
+
+function simularCarteira(itens, dados) {
+  const cfg = simCfg;
+  const cdiDia = new Map(D.cdi_diario ?? []);
+  const bova = dados.BOVA11;
+  const fim = [...itens.filter(i => i.tipo === 'ativo').map(i => dados[i.tk].precos.at(-1)[0]), bova?.precos.at(-1)[0], D.cdi_diario.at(-1)[0]].filter(Boolean).sort().at(-1);
+  let inicio = cfg.anos ? isoMais(fim, -cfg.anos) : D.cdi_diario[0][0];
+  // Ativo que começou a negociar depois do início empurra o começo da simulação
+  const avisos = [];
+  for (const i of itens) if (i.tipo === 'ativo') {
+    const p0 = dados[i.tk].precos[0][0];
+    if (p0 > inicio) {
+      if (p0 > isoMais(inicio, 0, 40)) avisos.push(`${i.tk} só tem cotação desde ${data(p0)}`);
+      inicio = p0;
+    }
+  }
+  if (bova && bova.precos[0][0] > inicio) inicio = bova.precos[0][0];
+  const dias = [...new Set([...D.cdi_diario.map(x => x[0]), ...Object.values(dados).filter(Boolean).flatMap(d => d.precos.map(p => p[0]))])]
+    .filter(d => d >= inicio && d <= fim).sort();
+
+  // IPCA do mês espalhado pelos dias úteis dele; mês ainda sem IPCA usa a média dos últimos 12
+  const uteis = new Map();
+  for (const [d] of D.cdi_diario) uteis.set(d.slice(0, 7), (uteis.get(d.slice(0, 7)) ?? 0) + 1);
+  const mesFinalCdi = D.cdi_diario.at(-1)[0].slice(0, 7);
+  const ipcaMap = new Map(D.ipca_mensal ?? []);
+  const ult12 = (D.ipca_mensal ?? []).slice(-12);
+  const ipcaMedio = ult12.length ? ult12.reduce((p, x) => p * (1 + x[1] / 100), 1) ** (1 / 12) - 1 : 0.004;
+  const estimados = new Set();
+  const fatorIpca = (d, taxaAa) => {
+    const m = d.slice(0, 7), n = m >= mesFinalCdi ? Math.max(21, uteis.get(m) ?? 0) : uteis.get(m) ?? 21;
+    if (!ipcaMap.has(m)) estimados.add(m);
+    return ((1 + (ipcaMap.has(m) ? ipcaMap.get(m) / 100 : ipcaMedio)) * (1 + taxaAa) ** (1 / 12)) ** (1 / n);
+  };
+
+  const novo = (i, d) => ({
+    ...i, precos: d?.precos ?? null, ip: 0, preco: 1, iprov: 0,
+    provs: d ? d.proventos.filter(p => p[0] >= inicio).map(p => [p[0], p[4]]).sort((a, b) => a[0].localeCompare(b[0])) : [],
+    un: 0, pend: 0, solo: 0, soloPend: 0, netInv: 0, caixaProv: 0, recebido: 0, serie: [], meses: new Map(),
+  });
+  const A = itens.map(i => novo(i, i.tipo === 'ativo' ? dados[i.tk] : null));
+  const ibov = bova ? novo({ tipo: 'ativo', tk: 'BOVA11', w: 0 }, bova) : null;
+  let caixa = 0, investido = 0, invCorr = 0, saldoCdi = 0, unIbov = 0, idxCdi = 1, idxIpca = 1, twr = 1, vAnt = 0, mes = null;
+  let proxRebal = isoMais(dias[0], 1);
+  const diario = [], porMes = new Map(), recebidos = [];
+  const valorAtivos = () => A.reduce((s, a) => s + a.un * a.preco, 0);
+  const valor = () => valorAtivos() + A.reduce((s, a) => s + a.pend, 0) + caixa;
+  const comprar = (a, v) => { a.un += v / a.preco; a.netInv += v; };
+
+  dias.forEach((d, k) => {
+    // 1) Renda fixa e índices rendem nos dias úteis
+    if (k > 0 && cdiDia.has(d)) {
+      const c = cdiDia.get(d) / 100, fi = fatorIpca(d, 0);
+      idxCdi *= 1 + c; saldoCdi *= 1 + c; idxIpca *= fi; invCorr *= fi;
+      for (const a of A) if (a.tipo !== 'ativo') a.preco *= a.tipo === 'cdi' ? 1 + c * a.taxa / 100 : a.tipo === 'pre' ? (1 + a.taxa / 100) ** (1 / 252) : fatorIpca(d, a.taxa / 100);
+    }
+    // 2) Preço do dia (o último conhecido quando não negociou) e proventos: direito pelas ações da véspera,
+    //    pago no primeiro pregão depois da data com
+    for (const a of ibov ? [...A, ibov] : A) {
+      if (!a.precos) continue;
+      while (a.ip + 1 < a.precos.length && a.precos[a.ip + 1][0] <= d) a.ip++;
+      a.preco = a.precos[a.ip][1];
+      while (a.iprov < a.provs.length && a.provs[a.iprov][0] < d) { const v = a.provs[a.iprov++][1]; a.pend += a.un * v; a.soloPend += a.solo * v; }
+      if (a.precos[a.ip][0] === d && (a.pend || a.soloPend)) {
+        if (a !== ibov) {
+          a.recebido += a.pend; recebidos.push([d, a.pend]);
+          if (cfg.reinveste) a.un += a.pend / a.preco; else { caixa += a.pend; a.caixaProv += a.pend; }
+        }
+        a.solo += a.soloPend / a.preco; a.pend = 0; a.soloPend = 0;
+      }
+    }
+    // 3) Rentabilidade do dia, antes dos aportes
+    const v0 = valor();
+    if (vAnt > 0) twr *= v0 / vAnt;
+    // 4) Aportes: o inicial no primeiro dia, o mensal no primeiro dia útil de cada mês
+    const aporte = k === 0 ? cfg.inicial : d.slice(0, 7) !== mes ? cfg.mensal * (cfg.corrige ? idxIpca : 1) : 0;
+    mes = d.slice(0, 7);
+    if (k === 0) for (const a of ibov ? [...A, ibov] : A) a.solo = 1 / a.preco;
+    if (aporte > 0) {
+      investido += aporte; invCorr += aporte; saldoCdi += aporte;
+      if (ibov) unIbov += aporte / ibov.preco;
+      const total = valorAtivos();
+      if (cfg.rebal === 'aporte' && total > 0) {
+        const falta = A.map(a => Math.max(0, a.w * (total + aporte) - a.un * a.preco));
+        const sf = falta.reduce((s, x) => s + x, 0);
+        A.forEach((a, j) => comprar(a, sf <= aporte ? falta[j] + (aporte - sf) * a.w : aporte * falta[j] / sf));
+      } else A.forEach(a => comprar(a, aporte * a.w));
+    }
+    // 5) Rebalanceamento anual: vende o que passou do peso e compra o que ficou para trás
+    if (cfg.rebal === 'anual' && k > 0 && d >= proxRebal) {
+      const total = valorAtivos();
+      for (const a of A) { const alvo = a.w * total; a.netInv += alvo - a.un * a.preco; a.un = alvo / a.preco; }
+      proxRebal = isoMais(proxRebal, 1);
+    }
+    vAnt = valor();
+    diario.push([d, twr, idxCdi, ibov ? ibov.solo * ibov.preco + ibov.soloPend : null, idxIpca]);
+    for (const a of A) { const s = a.solo * a.preco + a.soloPend; a.serie.push(s); a.meses.set(mes, s); }
+    porMes.set(mes, [vAnt, saldoCdi, ibov ? unIbov * ibov.preco : null, invCorr]);
+  });
+
+  const ini = dias[0], ult = dias.at(-1), ultimo = diario.at(-1);
+  const anos = (Date.parse(ult) - Date.parse(ini)) / (365.25 * 864e5);
+  const aa = x => (anos >= 0.95 ? x ** (1 / anos) - 1 : null);
+  const totalAtivos = valorAtivos();
+  // Ano a ano pela cota: o último dia de cada ano contra o último do ano anterior (ou o primeiro dia)
+  const anosCal = [];
+  let base = diario[0];
+  for (let k = 0; k < diario.length; k++) {
+    const p = diario[k], prox = diario[k + 1];
+    if (!prox || prox[0].slice(0, 4) !== p[0].slice(0, 4)) {
+      anosCal.push({ ano: p[0].slice(0, 4), parcial: (base === diario[0] && base[0].slice(5) > '01-10') || (!prox && p[0].slice(5) < '12-20'),
+        r: [1, 2, 3, 4].map(j => (ok(p[j]) && ok(base[j]) ? p[j] / base[j] - 1 : null)) });
+      base = p;
+    }
+  }
+  const umAno = isoMais(ult, -1);
+  const variaveis = A.filter(a => a.tipo === 'ativo');
+  const mesesSerie = [...porMes.keys()];
+  const retMensal = a => mesesSerie.slice(1).map((m, j) => a.meses.get(m) / a.meses.get(mesesSerie[j]) - 1);
+  return {
+    ini, fim: ult, anos, avisos, estimados: [...estimados].sort(), investido, final: vAnt, invCorr,
+    twr: ultimo[1] - 1, twrAa: aa(ultimo[1]), cdi: ultimo[2] - 1, cdiAa: aa(ultimo[2]),
+    ibov: ok(ultimo[3]) ? ultimo[3] - 1 : null, ibovAa: ok(ultimo[3]) ? aa(ultimo[3]) : null,
+    ipca: ultimo[4] - 1, ipcaAa: aa(ultimo[4]),
+    vol: volAnual(diario.map(p => p[1])), queda: maiorQuedaSerie(diario.map(p => [p[0], p[1]])),
+    recebido: recebidos.reduce((s, x) => s + x[1], 0), renda12: recebidos.filter(x => x[0] > umAno).reduce((s, x) => s + x[1], 0),
+    diario, porMes, anosCal,
+    ativos: A.map(a => {
+      const fimV = a.un * a.preco, s = a.serie, tot = s.at(-1) / s[0];
+      return { rotulo: rotuloItemSim(a), tk: a.tk, tipo: a.tipo, w: a.w, peso: totalAtivos ? fimV / totalAtivos : null, ret: tot - 1, aa: aa(tot),
+        vol: a.tipo === 'ativo' ? volAnual(s) : null, queda: a.tipo === 'ativo' ? maiorQuedaSerie(dias.map((d, k) => [d, s[k]])).queda : null,
+        ganho: fimV + a.pend + a.caixaProv - a.netInv, recebido: a.recebido };
+    }),
+    correl: variaveis.length >= 2 ? { nomes: variaveis.map(a => a.tk), m: variaveis.map(a => variaveis.map(b => (a === b ? 1 : correlacao(retMensal(a), retMensal(b))))) } : null,
+  };
+}
+
+function desenharResultadoSim(r) {
+  const out = $('#simc-resultado');
+  if (r.diario.length < 20) { out.innerHTML = '<p class="vazio" style="margin-top:12px">Período curto demais para simular.</p>'; return; }
+  const ganho = r.final - r.investido, q = r.queda;
+  const mesesAte = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / (30.44 * 864e5));
+  const pctCdi = r.cdi > 0 ? r.twr / r.cdi : null;
+  const real = ok(r.twrAa) && ok(r.ipcaAa) ? (1 + r.twrAa) / (1 + r.ipcaAa) - 1 : (1 + r.twr) / (1 + r.ipca) - 1;
+  const sharpe = ok(r.twrAa) && ok(r.cdiAa) && r.vol > 0.005 ? (r.twrAa - r.cdiAa) / r.vol : null;
+  const inteiro = Math.abs(r.anos - Math.round(r.anos)) < 0.05;
+  const periodo = r.anos >= 0.95 ? `${num(r.anos, inteiro ? 0 : 1)} ${inteiro && Math.round(r.anos) === 1 ? 'ano' : 'anos'}` : `${mesesAte(r.ini, r.fim)} meses`;
+  // O sinal vai no próprio <b>: span dentro do quadro ganha o estilo de rótulo
+  const tile = (rot, val, sub = '', dica = '', cls = '') => `<div${dica ? ` title="${esc(dica)}"` : ''}><span>${rot}</span><b class="${cls}">${val}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  const anual = x => (ok(x) ? `${pctSinal(x)} ao ano` : '');
+  out.innerHTML = `
+    ${r.avisos.length ? `<ul class="alertas" style="margin-top:12px"><li>${ICONE_ALERTA}<span>${esc(r.avisos.join('; '))}: a simulação começa aí, não no início do período escolhido.</span></li></ul>` : ''}
+    <div class="ativo-numeros ativo-numeros-p" style="margin-top:12px">
+      ${tile('Total aportado', dinheiro(r.investido), r.invCorr > r.investido * 1.001 ? `${dinheiro(r.invCorr)} corrigido pela inflação` : '')}
+      ${tile('Saldo final', dinheiro(r.final), `${ganho >= 0 ? 'ganho de' : 'perda de'} ${dinheiro(Math.abs(ganho))}`)}
+      ${tile('Rentabilidade', pctSinal(r.twr), anual(r.twrAa), 'Rentabilidade da cota: tira o efeito dos aportes, como nos fundos. É a que se compara com o CDI e o Ibovespa.', classeSinal(r.twr))}
+      ${tile('CDI no período', pctSinal(r.cdi), pctCdi != null ? `a carteira fez ${num(pctCdi * 100, 0)}% do CDI` : '')}
+      ${tile('Ibovespa (BOVA11)', pctSinal(r.ibov), anual(r.ibovAa), '', classeSinal(r.ibov))}
+      ${tile('Acima da inflação', pctSinal(real), `${r.anos >= 0.95 ? 'ao ano; ' : ''}IPCA de ${pct(r.ipca)} no período`, '', classeSinal(real))}
+      ${tile('Volatilidade', pct(r.vol), 'ao ano', 'Quanto a cota oscila de um dia para o outro, em base anual. Renda fixa fica perto de 0%; o Ibovespa costuma ficar entre 20% e 25%.')}
+      ${tile('Maior queda', pct(q.queda), q.queda < -0.001 ? `${mesAno(q.pico.slice(0, 7))} a ${mesAno(q.fundo.slice(0, 7))}` : 'nenhuma relevante', '', classeSinal(q.queda))}
+      ${tile('Índice de Sharpe', ok(sharpe) ? num(sharpe, 2) : '–', 'retorno acima do CDI por risco', 'Quanto a carteira rendeu acima do CDI para cada ponto de volatilidade. Acima de 0,5 é bom; negativo quer dizer que perdeu do CDI.')}
+      ${tile('Proventos recebidos', dinheiro(r.recebido), r.renda12 ? `${dinheiro(r.renda12 / 12)}/mês nos últimos 12 meses` : '')}
+    </div>
+    <p class="tile-sub" style="margin:0 0 12px;font-size:.9rem">${resumoSim(r, periodo, mesesAte)}</p>
+    <div class="grafico-bloco"><h3>Saldo da carteira</h3>
+      <div class="tile-sub">O mesmo dinheiro, aportado nas mesmas datas, no CDI e no Ibovespa. A linha cinza é o total aportado corrigido pela
+        inflação: abaixo dela, o dinheiro perdeu poder de compra.</div>
+      <div class="grafico" id="g-simc"></div></div>
+    <div class="duas-colunas">
+      <div class="grafico-bloco"><h3>Queda desde o pico</h3>
+        <div class="tile-sub">Quanto a cota estava abaixo do melhor momento anterior: o tamanho e a duração das fases ruins que seria preciso aguentar.</div>
+        <div class="grafico" id="g-simc-queda"></div></div>
+      <div class="grafico-bloco"><h3>Ano a ano</h3>
+        <div class="tile-sub">Rentabilidade da cota em cada ano.${r.anosCal.some(a => a.parcial) ? ' * ano incompleto no período.' : ''}</div>
+        <div class="tabela-caixa" style="max-height:none"><table><thead><tr><th class="esq">Ano</th><th>Carteira</th><th>CDI</th><th>Ibovespa</th><th>IPCA</th></tr></thead><tbody>
+        ${r.anosCal.map(a => `<tr style="cursor:default"><td class="esq">${a.ano}${a.parcial ? '*' : ''}</td>
+          <td class="${classeSinal(a.r[0])}"><b>${pctSinal(a.r[0])}</b></td><td>${pctSinal(a.r[1])}</td><td class="${classeSinal(a.r[2])}">${pctSinal(a.r[2])}</td><td>${pctSinal(a.r[3])}</td></tr>`).join('')}
+        </tbody></table></div></div>
+    </div>
+    <div class="grafico-bloco" style="margin-top:12px"><h3>Cada ativo no período</h3>
+      <div class="tile-sub">Retorno de cada um sozinho, com os proventos reinvestidos. "Resultado" é quanto cada um somou ao saldo final, em reais.
+        O peso hoje mostra para onde a carteira derivou${simCfg.rebal === 'anual' ? ' desde o último rebalanceamento' : ''}.</div>
+      <div class="tabela-caixa" style="max-height:none"><table>
+        <thead><tr><th class="esq">Ativo</th><th>Peso alvo</th><th>Peso hoje</th><th>Retorno</th><th>Ao ano</th><th>Volatilidade</th><th>Maior queda</th><th>Proventos</th><th>Resultado</th></tr></thead>
+        <tbody>${[...r.ativos].sort((a, b) => b.w - a.w).map(a => `<tr${a.tipo === 'ativo' && porTicker.has(a.tk) ? ` data-ticker="${esc(a.tk)}"` : ' style="cursor:default"'}>
+          <td class="esq"><b>${esc(a.rotulo)}</b>${a.tipo === 'ativo' ? `<span class="nome" style="display:block">${esc(nomeSim(a.tk))}</span>` : ''}</td>
+          <td>${pct(a.w)}</td><td>${pct(a.peso)}</td><td class="${classeSinal(a.ret)}">${pctSinal(a.ret)}</td><td class="${classeSinal(a.aa)}">${pctSinal(a.aa)}</td>
+          <td>${a.vol != null ? pct(a.vol) : '–'}</td><td>${a.queda != null ? pct(a.queda) : '–'}</td><td>${a.recebido ? dinheiro(a.recebido) : '–'}</td>
+          <td class="${classeSinal(a.ganho)}">${a.ganho >= 0 ? '+' : '−'}${dinheiro(Math.abs(a.ganho))}</td></tr>`).join('')}</tbody></table></div></div>
+    ${r.correl ? `<div class="grafico-bloco" style="margin-top:12px"><h3>Quanto os ativos andam juntos</h3>
+      <div class="tile-sub">Correlação dos retornos mensais no período. Perto de 1: sobem e caem juntos, um não protege o outro.
+        Perto de 0 ou negativa: quando um cai, o outro tende a segurar, e a carteira oscila menos.</div>
+      <div class="tabela-caixa" style="max-height:none"><table class="simc-correl"><thead><tr><th></th>${r.correl.nomes.map(n => `<th>${esc(n)}</th>`).join('')}</tr></thead>
+        <tbody>${r.correl.m.map((linha, i) => `<tr style="cursor:default"><th class="esq">${esc(r.correl.nomes[i])}</th>${linha.map((c, j) =>
+          `<td${i !== j && ok(c) ? ` class="${c >= 0 ? 'cor-pos' : 'cor-neg'}" style="--c:${Math.round(Math.abs(c) * 55)}%"` : ''}>${i === j ? '–' : ok(c) ? num(c, 2) : '–'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>` : ''}
+    <p class="tile-sub" style="margin-top:12px">${notasSim(r)}</p>`;
+
+  for (const tr of out.querySelectorAll('tr[data-ticker]')) tr.addEventListener('click', () => irPara(`empresa/${tr.dataset.ticker}`));
+  const meses = [...r.porMes.keys()];
+  graficoLinhas($('#g-simc'), { series: [
+    { nome: 'Carteira', cor: 'var(--serie-1)', pontos: meses.map(m => [m, r.porMes.get(m)[0]]) },
+    { nome: 'CDI', cor: 'var(--serie-4)', pontos: meses.map(m => [m, r.porMes.get(m)[1]]) },
+    ...(ok(r.ibov) ? [{ nome: 'Ibovespa', cor: 'var(--serie-3)', pontos: meses.map(m => [m, r.porMes.get(m)[2]]) }] : []),
+    { nome: 'Aportado + inflação', cor: 'var(--texto-3)', pontos: meses.map(m => [m, r.porMes.get(m)[3]]) }], fmt: dinheiro, eixoZero: true, altura: 280 });
+  let pico = 0;
+  graficoDiario($('#g-simc-queda'), { pontos: r.diario.map(p => { pico = Math.max(pico, p[1]); return [p[0], 100 * (p[1] / pico - 1)]; }),
+    fmt: v => `${num(v, 1)}%`, cor: 'var(--negativo-col)', altura: 220 });
+}
+
+function resumoSim(r, periodo, mesesAte) {
+  const q = r.queda;
+  let t = `Em ${periodo} (${data(r.ini)} a ${data(r.fim)}), a carteira rendeu <b class="${classeSinal(r.twr)}">${pctSinal(r.twr)}</b>${ok(r.twrAa) ? ` (${pct(r.twrAa)} ao ano)` : ''}
+    e ${r.twr >= r.cdi ? 'ganhou' : 'perdeu'} do CDI, que fez ${pctSinal(r.cdi)}${ok(r.ibov) ? `; o Ibovespa fez ${pctSinal(r.ibov)}` : ''}.`;
+  if (q.queda < -0.02) {
+    t += ` A pior fase foi uma queda de <b class="negativo">${pct(q.queda)}</b> entre ${mesAno(q.pico.slice(0, 7))} e ${mesAno(q.fundo.slice(0, 7))}; `;
+    t += q.volta ? `voltou ao pico em ${mesAno(q.volta.slice(0, 7))}, ${mesesAte(q.pico, q.volta)} meses depois do topo.` : 'até o fim do período não voltou ao pico.';
+  }
+  return t;
+}
+
+function notasSim(r) {
+  const n = ['Sem imposto de renda, taxas nem corretagem.', 'Ações e ETFs pelo fechamento ajustado por desdobramentos e bonificações; proventos pela data com, pagos no pregão seguinte.',
+    'Renda fixa na curva: um Tesouro vendido antes do vencimento pode render mais ou menos que isso.'];
+  if (!simCfg.reinveste) n.push('Proventos guardados em caixa, sem render.');
+  if (r.estimados.length) n.push(`IPCA de ${r.estimados.map(m => mesAno(m)).join(' e ')} ainda não divulgado: usa a média dos últimos 12 meses.`);
+  n.push('Passado não garante o futuro: serve para entender risco e comportamento, não para prever retorno.');
+  return n.join(' ');
+}
+
 // ---------- Método ----------
 function montarMetodo(el) {
   el.innerHTML = `
@@ -2202,6 +2663,12 @@ function montarMetodo(el) {
       <p>Balanços trimestrais e anuais da CVM (Dados Abertos), cotações oficiais da B3 (arquivo COTAHIST), juros,
         inflação e dólar do Banco Central e taxas do Tesouro Direto. Tudo é baixado automaticamente todo dia. O histórico
         de balanços começa em 2015; o de múltiplos, em 2020, porque antes disso a CVM não publica a quantidade de ações.</p>
+      <h3>Simulador de carteira</h3>
+      <p>Refaz o caminho dia a dia: ações e ETFs pelo fechamento ajustado e pelos proventos (pagos no pregão seguinte à data com),
+        renda fixa na curva pelo CDI, pelo IPCA do mês mais a taxa escolhida ou por uma taxa prefixada. O aporte mensal entra no
+        primeiro dia útil de cada mês. A rentabilidade é a da cota, como nos fundos: tira o efeito dos aportes, para poder comparar
+        com o CDI e o Ibovespa. Volatilidade, maior queda e Sharpe saem da cota diária; a correlação, dos retornos mensais. Não
+        desconta imposto, taxas nem corretagem, e a configuração fica salva só neste aparelho.</p>
       <h3>Notícias e movimentos</h3>
       <p>A cada atualização, o site busca as notícias das ações da carteira, das que mais se mexeram no dia e do mercado
         (Ibovespa e dólar) no Google Notícias, com a busca dos próprios portais como reserva. Busca também política que mexe com
@@ -2350,6 +2817,8 @@ function graficoLinhas(el, { series, fmt, fmtEixo = null, ref = null, altura = 2
     const X = i => m.e + i * pw / (meses.length - 1);
     const Y = v => m.t + ph - (v - esc_.ini) / (esc_.fim - esc_.ini) * ph;
     const anos = meses.map((mm, i) => [mm, i]).filter(([mm], i) => mm.endsWith('-01') || i === 0);
+    // Rótulo do primeiro mês colado no do primeiro janeiro ("out/2021" e "2022"): fica só o do ano
+    if (anos.length > 1 && !anos[0][0].endsWith('-01') && X(anos[1][1]) - X(0) < 60) anos.shift();
     const passoAno = Math.ceil(anos.length / Math.max(1, Math.floor(pw / 48)));
     let svg = `<svg width="${W}" height="${H}" role="img" aria-label="${esc(series.map(s => s.nome).join(', '))}">
       <defs><clipPath id="${idClip}"><rect x="0" y="${m.t - 4}" width="${W}" height="${ph + 8}"/></clipPath></defs>`;
