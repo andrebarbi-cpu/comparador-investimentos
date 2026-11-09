@@ -718,7 +718,14 @@ function limparDados(d) {
     nome: typeof c.nome === 'string' ? c.nome.slice(0, 40) : '',
     valor: numeroValido(c.valor), data: /^\d{4}-\d{2}-\d{2}$/.test(c.data ?? '') ? c.data : '', pct: numeroValido(c.pct) ?? 100,
   }));
-  return { qtd: numeros(d?.qtd), cdbs, reserva: numeros(d?.reserva) };
+  // Operações de cada ativo (preço médio): data, tipo (c = compra, v = venda, s = subscrição, b = cotas recebidas), quantidade e preço
+  const compras = Object.fromEntries(Object.entries(d?.compras && typeof d.compras === 'object' ? d.compras : {})
+    .filter(([k, v]) => /^[A-Z0-9]{4,12}$/.test(k) && Array.isArray(v))
+    .map(([k, v]) => [k, v.filter(o => o && typeof o === 'object').slice(0, 500).map(o => ({
+      d: /^\d{4}-\d{2}-\d{2}$/.test(o.d ?? '') ? o.d : '', t: ['c', 'v', 's', 'b'].includes(o.t) ? o.t : 'c',
+      q: numeroValido(o.q), p: numeroValido(o.p) }))])
+    .filter(([, v]) => v.length));
+  return { qtd: numeros(d?.qtd), cdbs, reserva: numeros(d?.reserva), pm: numeros(d?.pm), compras };
 }
 function lerLocal() {
   try {
@@ -727,10 +734,11 @@ function lerLocal() {
       // Antes eram duas carteiras ("dividendos" e "global"); a reserva era da global
       const reserva = s.reserva ?? {};
       if (reserva.global && !reserva.principal) reserva.principal = reserva.global;
-      return { ...limparDados({ qtd: s.qtd, cdbs: s.cdbs, reserva }), soTenho: !!s.soTenho };
+      return { ...limparDados({ qtd: s.qtd, cdbs: s.cdbs, reserva, pm: s.pm, compras: s.compras }), soTenho: !!s.soTenho,
+        visao: s.visao === 'posicao' ? 'posicao' : 'analise' };
     }
   } catch { /* sem acesso ao armazenamento: segue sem quantidades */ }
-  return { qtd: {}, cdbs: [], reserva: {} };
+  return { qtd: {}, cdbs: [], reserva: {}, pm: {}, compras: {}, visao: 'analise' };
 }
 let local = lerLocal();
 let localSalvo = true;
@@ -748,10 +756,10 @@ function importar(codigo) {
     const d = limparDados(deBase64(codigo));
     // O link traz a carteira inteira de quem gerou: substitui a deste aparelho, depois de confirmar
     const temAlgo = Object.keys(local.qtd).length || local.cdbs.length;
-    if (temAlgo && !confirm('Este link substitui as quantidades, os CDBs e a reserva salvos neste aparelho pelos do link. Continuar?')) {
+    if (temAlgo && !confirm('Este link substitui as quantidades, os preços médios, as operações, os CDBs e a reserva salvos neste aparelho pelos do link. Continuar?')) {
       avisoImportacao = 'Importação cancelada: nada foi alterado.';
     } else {
-      local = { ...local, qtd: d.qtd, cdbs: d.cdbs, reserva: d.reserva };
+      local = { ...local, qtd: d.qtd, cdbs: d.cdbs, reserva: d.reserva, pm: d.pm, compras: d.compras };
       salvarLocal();
       avisoImportacao = localSalvo ? 'Quantidades importadas e salvas neste aparelho.'
       : 'Quantidades importadas, mas este navegador não deixa salvar: elas somem ao fechar a página.';
@@ -793,14 +801,14 @@ const situacao = l => {
 function montarCarteiras(el) {
   el.innerHTML = `
     <h2>Carteira</h2>
-    <p class="intro">Todos os ativos que vocês acompanham numa lista só. Cada um preenche as próprias quantidades: elas ficam
-      salvas só neste aparelho e nunca vão para o site. Para levar para outro celular, use “Gerar link com minhas quantidades” no fim da página.</p>
+    <p class="intro">Todos os ativos que vocês acompanham numa lista só. Cada um preenche as próprias quantidades (e, em
+      "Posição e preço médio", as operações ou o preço médio): tudo fica salvo só neste aparelho e nunca vai para o site. Para levar para outro celular, use “Gerar link com minhas quantidades” no fim da página.</p>
     ${avisoImportacao ? `<div class="aviso aviso-info"><div>${esc(avisoImportacao)}</div></div>` : ''}
     ${blocoAgenda()}
     <div id="cart-corpo"></div>
     <div class="grafico-bloco" style="margin-top:20px">
       <h3>Levar as quantidades para outro aparelho</h3>
-      <p class="tile-sub">O link carrega as quantidades e os CDBs deste aparelho. Quem abrir grava esses números no próprio
+      <p class="tile-sub">O link carrega as quantidades, os preços médios, as operações e os CDBs deste aparelho. Quem abrir grava esses números no próprio
         navegador. Mande só para quem você quiser.</p>
       <div class="filtros"><button class="botao" id="cart-link">Gerar link com minhas quantidades</button>
         <input class="campo" id="cart-link-txt" readonly style="flex:1;min-width:200px" aria-label="Link gerado" hidden></div>
@@ -808,7 +816,7 @@ function montarCarteiras(el) {
   avisoImportacao = '';
   desenharCarteiras();
   $('#cart-link').addEventListener('click', async () => {
-    const url = `${location.origin}${location.pathname}#importar/${paraBase64({ qtd: local.qtd, cdbs: local.cdbs, reserva: local.reserva })}`;
+    const url = `${location.origin}${location.pathname}#importar/${paraBase64({ qtd: local.qtd, cdbs: local.cdbs, reserva: local.reserva, pm: local.pm, compras: local.compras })}`;
     const txt = $('#cart-link-txt');
     txt.hidden = false;
     txt.value = url;
@@ -822,11 +830,14 @@ function desenharCarteiras() {
   const corpo = $('#cart-corpo');
   corpo.innerHTML = CARTEIRAS.map(c => `<section class="carteira" data-id="${esc(c.id)}">
       <div class="carteira-topo">
+        <span class="segmentado" role="group" aria-label="Visualização">${[['analise', 'Análise'], ['posicao', 'Posição e preço médio']].map(([v, r]) =>
+          `<button data-visao="${v}" aria-pressed="${local.visao === v}">${r}</button>`).join('')}</span>
         <label class="tile-sub"><input type="checkbox" data-so-tenho ${local.soTenho ? 'checked' : ''}> Mostrar só o que tenho</label></div>
       <div class="blocos" id="resumo-${esc(c.id)}"></div>
       <h3 class="secao">Ativos</h3>
-      ${c.acoes?.length ? blocoAcoes(c) : ''}
-      ${c.etfs?.length ? blocoEtfs(c) : ''}
+      ${local.visao === 'posicao' ? `${c.acoes?.length ? resumoClasse(c, c.acoes, 'Ações') + tabelaPosicao(c, c.acoes, true) : ''}
+        ${c.etfs?.length ? resumoClasse(c, c.etfs, 'ETFs') + tabelaPosicao(c, c.etfs, false) : ''}`
+        : `${c.acoes?.length ? blocoAcoes(c) : ''}${c.etfs?.length ? blocoEtfs(c) : ''}`}
       ${c.tesouro?.length ? blocoTesouro(c) : ''}
       ${c.cdb ? blocoCdb() : ''}
       <h3 class="secao">Análise</h3>
@@ -834,6 +845,9 @@ function desenharCarteiras() {
       ${blocoGatilhos(c)}
     </section>`).join('');
   for (const c of CARTEIRAS) resumoCarteira(c);
+  if (local.visao === 'posicao') carregarPm(CARTEIRAS.flatMap(c => [...(c.acoes ?? []), ...(c.etfs ?? [])]));
+  for (const b of corpo.querySelectorAll('[data-visao]')) b.addEventListener('click', () => { local.visao = b.dataset.visao; salvarLocal(); desenharCarteiras(); });
+  for (const b of corpo.querySelectorAll('[data-pm]')) b.addEventListener('click', ev => { ev.stopPropagation(); abrirJanelaPm(b.dataset.pm); });
   for (const i of corpo.querySelectorAll('input.qtd')) i.addEventListener('change', () => {
     const v = Number(i.value);
     if (v > 0) local.qtd[i.dataset.chave] = v; else delete local.qtd[i.dataset.chave];
@@ -841,13 +855,13 @@ function desenharCarteiras() {
     desenharCarteiras();
   });
   for (const tr of corpo.querySelectorAll('tr[data-ticker]')) tr.addEventListener('click', ev => {
-    if (!ev.target.closest('input')) irPara(`empresa/${tr.dataset.ticker}`);
+    if (!ev.target.closest('input, button')) irPara(`empresa/${tr.dataset.ticker}`);
   });
   // Títulos: o 1º clique inclui o critério, o 2º inverte, o 3º tira (vários critérios = posição combinada).
   // Texto começa em A→Z; números do maior para o menor, menos desconto e situação (o mais barato primeiro).
   for (const th of corpo.querySelectorAll('th[data-ordem]')) th.addEventListener('click', () => {
-    const id = th.closest('.carteira').dataset.id, k = th.dataset.ordem;
-    const col = COLUNAS_CARTEIRA.find(c => c.k === k);
+    const id = chaveOrdem(th.closest('.carteira').dataset.id), k = th.dataset.ordem;
+    const col = colunaCarteira(k);
     ordemCarteira[id] = alternarCriterio(ordemCarteira[id] ?? [], k, !col.texto && k !== 'situacao' && k !== 'pl');
     desenharCarteiras();
   });
@@ -891,14 +905,17 @@ const COLUNAS_CARTEIRA = [
   { k: 'situacao', r: 'Situação e tese', esq: true, v: l => l.e?.pl_pct_regua, dica: 'O que a regra manda fazer e o que pesa contra a tese; ordena do mais barato ao mais caro contra o próprio histórico' },
 ];
 const ordemCarteira = {};
-const colunaCarteira = k => COLUNAS_CARTEIRA.find(c => c.k === k);
+// Cada visualização (análise ou posição) tem as próprias colunas e a própria ordenação
+const colunasVisao = () => (local.visao === 'posicao' ? COLUNAS_POSICAO : COLUNAS_CARTEIRA);
+const colunaCarteira = k => colunasVisao().find(c => c.k === k);
+const chaveOrdem = id => `${id}:${local.visao}`;
 function blocoAcoes(c) {
-  const criterios = ordemCarteira[c.id] ?? [];
+  const criterios = ordemCarteira[chaveOrdem(c.id)] ?? [];
   const { linhas, combinado } = ordenarPorCriterios(linhasAcoes(c).filter(l => !local.soTenho || l.q > 0), criterios, (l, k) => colunaCarteira(k).v(l), k => colunaCarteira(k).texto);
   const total = linhas.reduce((s, l) => s + l.saldo, 0);
   const aviso = criterios.length ? `<div class="filtros" style="margin:0 0 8px"><span class="contagem" style="margin:0">Ordenando por
     ${esc(descreverCriterios(criterios, k => colunaCarteira(k).r))}${combinado ? ' (posição combinada)' : ''}</span>
-    <button class="botao" data-limpar-ordem="${esc(c.id)}">Limpar ordenação</button></div>` : '';
+    <button class="botao" data-limpar-ordem="${esc(chaveOrdem(c.id))}">Limpar ordenação</button></div>` : '';
   return `<p class="tile-sub" style="margin:0 0 8px">Normal é o preço em que o P/L volta à mediana; caro, ao percentil 75.
     Vale a régua mais exigente entre desde 2020 e os últimos 2 anos (juro alto como hoje). Os dois supõem o lucro de hoje. A situação segue as regras de config/carteiras.json: elas apontam o momento, a decisão é de vocês.</p>
   ${aviso}<div class="tabela-caixa" style="max-height:none"><table>
@@ -997,6 +1014,238 @@ function calcularCdb(cdb) {
   const aliquota = dias <= 180 ? 0.225 : dias <= 360 ? 0.2 : dias <= 720 ? 0.175 : 0.15;
   return { bruto, rend: fator - 1, aliquota, liquido: bruto - Math.max(0, bruto - aplicado) * aliquota };
 }
+// ---------- Preço médio e retorno da posição ----------
+// O preço médio sai das operações que cada um registra neste aparelho (compra, venda, subscrição), ajustado pelos
+// eventos da B3 que os consolidadores costumam ignorar:
+//   bonificação, desdobramento e grupamento mudam as cotas sem mudar o custo (o preço médio cai ou sobe);
+//   a fração que sobra vai a leilão: sai pelo preço médio (o preço médio não muda) e o dinheiro entra como provento;
+//   restituição de capital devolve parte do que foi pago: abate o custo, não é provento.
+// Venda tira cotas pelo preço médio do dia e não muda o preço médio. Dividendos, rendimentos e JCP (líquido dos 15%
+// de IR) entram como proventos pelas cotas na data com. Um preço médio informado à mão vale no lugar do calculado.
+const dadosPm = new Map();
+function carregarPm(tks) {
+  const faltam = tks.filter(tk => (local.compras[tk] ?? []).length && !dadosPm.has(tk));
+  if (!faltam.length) return;
+  for (const tk of faltam) dadosPm.set(tk, null);
+  Promise.all(faltam.map(tk => carregarAtivo(tk).then(d => dadosPm.set(tk, d ?? { proventos: [], eventos: [], precos: [], falhou: true }))))
+    .then(() => { if ($('#cart-corpo')) desenharCarteiras(); if ($('#dlg-pm')?.open) desenharJanelaPm(); });
+}
+const opsValidas = tk => (local.compras[tk] ?? []).filter(o => o.d && o.q > 0 && (ok(o.p) || o.t === 'b')).sort((a, b) => a.d.localeCompare(b.d) || (a.t === 'v') - (b.t === 'v'));
+function reconstruirPm(tk) {
+  const ops = opsValidas(tk);
+  if (!ops.length) return null;
+  const dj = dadosPm.get(tk);
+  if (!dj) return { carregando: true };
+  const ini = ops[0].d;
+  // Na mesma data: primeiro as operações, depois os proventos (direito de quem tinha no fim do dia), depois os eventos
+  const itens = [
+    ...ops.map(o => ({ d: o.d, k: 0, op: o })),
+    ...dj.proventos.filter(p => p[0] >= ini && p[0] <= D.data_precos).map(p => ({ d: p[0], k: 1, prov: p })),
+    ...dj.eventos.filter(e => e[0] >= ini && e[0] <= D.data_precos).map(e => ({ d: e[0], k: 2, ev: e })),
+  ].sort((a, b) => a.d.localeCompare(b.d) || a.k - b.k);
+  let cotas = 0, custo = 0, proventos = 0, leilao = 0, realizado = 0;
+  const passos = [], pm = () => (cotas > 1e-9 ? custo / cotas : 0);
+  const passo = (d, tipo, det, dq, dc, nota = '') => passos.push({ d, tipo, det, dq, dc, nota, cotas, custo, pm: pm() });
+  for (const it of itens) {
+    if (it.op) {
+      const o = it.op;
+      if (o.t === 'v') {
+        const q = Math.min(o.q, cotas), c = q * pm(), res = q * o.p - c;
+        realizado += res; cotas -= q; custo -= c;
+        passo(o.d, 'Venda', `a R$ ${num(o.p, 2)}`, -q, -c, `${res >= 0 ? 'lucro' : 'prejuízo'} de ${dinheiro(Math.abs(res))}${q < o.q ? '; venda maior que as cotas registradas' : ''}`);
+      } else {
+        const p = o.p ?? 0;
+        cotas += o.q; custo += o.q * p;
+        passo(o.d, { s: 'Subscrição', b: 'Cotas recebidas' }[o.t] ?? 'Compra', o.t === 'b' && !p ? 'sem custo' : `a R$ ${num(p, 2)}`, o.q, o.q * p,
+          o.t === 'b' ? 'registrada à mão' : '');
+      }
+    } else if (it.prov) {
+      if (cotas <= 1e-9) continue;
+      const [, , tipo, valor] = it.prov;
+      if (!ok(valor)) continue;
+      if (tipo === 'Restituição de capital') {
+        const c = Math.min(custo, valor * cotas);
+        custo -= c;
+        passo(it.d, 'Restituição de capital', `R$ ${num(valor, 4)} por cota`, 0, -c, 'dinheiro devolvido: abate o custo');
+      } else proventos += valor * cotas * (tipo === 'JCP' ? 0.85 : 1);
+    } else {
+      const [d, tipo, fator] = it.ev;
+      if (cotas <= 1e-9) continue;
+      const antes = cotas;
+      cotas *= tipo === 'GRUPAMENTO' ? fator : 1 + fator / 100;
+      const nome = { BONIFICACAO: 'Bonificação', DESDOBRAMENTO: 'Desdobramento', GRUPAMENTO: 'Grupamento' }[tipo] ?? tipo;
+      const det = tipo === 'BONIFICACAO' ? `${num(fator, 2)}% em cotas novas` : tipo === 'GRUPAMENTO' ? `${num(1 / fator, 0)} viram 1` : `1 vira ${num(1 + fator / 100, 0)}`;
+      passo(d, nome, det, cotas - antes, 0, tipo === 'GRUPAMENTO' ? '' : 'cotas novas sem custo: o preço médio cai');
+      const frac = cotas - Math.floor(cotas + 1e-6);
+      if (frac > 1e-6) {
+        const c = frac * pm(), preco = dj.precos.find(p => p[0] > d)?.[1];
+        cotas -= frac; custo -= c;
+        if (ok(preco)) leilao += frac * preco;
+        passo(d, 'Fração (leilão)', '', -frac, -c, ok(preco) ? `vendida em leilão por ~${dinheiro(frac * preco)}` : 'vendida em leilão');
+      }
+    }
+  }
+  return { cotas, custo, pm: pm(), proventos, leilao, realizado, passos, falhou: dj.falhou };
+}
+// Posição de um ativo: preço médio (informado ou calculado), investido, variação, proventos e retorno total
+function posicao(tk) {
+  const q = local.qtd[tk] ?? 0, p = precoAtual(tk), r = reconstruirPm(tk);
+  const calc = r && !r.carregando && r.cotas > 1e-9 ? r : null;
+  const manual = local.pm[tk] > 0 ? local.pm[tk] : null;
+  const pm = manual ?? calc?.pm ?? null;
+  const base = { tk, q, p, r, calc, manual, pm, carregando: !!r?.carregando,
+    difQtd: calc && Math.abs(calc.cotas - q) > 1e-6 ? calc.cotas : null };
+  if (!q || !ok(pm) || !ok(p)) return base;
+  const investido = q * pm, saldo = q * p;
+  const proventos = calc ? calc.proventos + calc.leilao : null;
+  const retorno = saldo - investido + (proventos ?? 0);
+  return { ...base, investido, saldo, variacao: saldo / investido - 1, proventos, retorno, rent: retorno / investido };
+}
+// Uma tabela no jeito de consolidador: quanto pagou, quanto vale, quanto rendeu com proventos
+const COLUNAS_POSICAO = [
+  { k: 'ticker', r: 'Ativo', esq: true, v: x => x.tk, texto: true },
+  { k: 'qtd', r: 'Qtd.', v: x => x.q },
+  { k: 'pm', r: 'Preço médio', v: x => x.pm, dica: 'Clique para ver como foi calculado, registrar operações ou informar o preço médio' },
+  { k: 'preco', r: 'Preço', v: x => x.p },
+  { k: 'investido', r: 'Investido', v: x => x.investido, dica: 'Quantidade × preço médio' },
+  { k: 'saldo', r: 'Saldo', v: x => x.saldo ?? (x.q && ok(x.p) ? x.q * x.p : null) },
+  { k: 'varpm', r: 'Variação', v: x => x.variacao, dica: 'Preço de hoje contra o preço médio, sem proventos' },
+  { k: 'proventos', r: 'Proventos', v: x => x.proventos, dica: 'Dividendos, rendimentos, JCP (líquido de IR) e leilão de frações desde a primeira operação registrada' },
+  { k: 'retorno', r: 'Retorno total', v: x => x.retorno, dica: 'Saldo − investido + proventos' },
+  { k: 'rent', r: 'Rentabilidade', v: x => x.rent, dica: 'Retorno total ÷ investido' },
+];
+function tabelaPosicao(c, tks, ordenavel) {
+  let linhas = tks.map(posicao).filter(x => !local.soTenho || x.q > 0);
+  const criterios = ordenavel ? ordemCarteira[chaveOrdem(c.id)] ?? [] : [];
+  if (criterios.length) linhas = ordenarPorCriterios(linhas, criterios, (x, k) => colunaCarteira(k)?.v(x), k => colunaCarteira(k)?.texto).linhas;
+  const celPm = x => `<button class="link-pm" data-pm="${esc(x.tk)}" title="Como chegamos no preço médio">${x.carregando ? '…'
+    : ok(x.pm) ? `R$ ${num(x.pm, 2)}` : '<span class="setor">informar</span>'}${x.manual ? '<sup title="Preço médio informado à mão">✎</sup>' : ''}${x.difQtd != null ? '<sup title="As operações registradas somam outra quantidade">⚠</sup>' : ''}</button>`;
+  const sinal = (v, f) => (ok(v) ? `<span class="${classeSinal(v)}">${f(v)}</span>` : '–');
+  return `<div class="tabela-caixa" style="max-height:none;margin-top:12px"><table>
+    <thead><tr>${COLUNAS_POSICAO.map(col => `<th ${ordenavel ? `data-ordem="${col.k}"` : ''} class="${col.esq ? 'esq' : ''}" ${col.dica ? `title="${esc(col.dica)}"` : ''}>${col.r}${ordenavel ? marcaCriterio(criterios, col.k) : ''}</th>`).join('')}</tr></thead>
+    <tbody>${linhas.map(x => `<tr ${porTicker.has(x.tk) ? `data-ticker="${esc(x.tk)}"` : 'style="cursor:default"'}>
+      <td class="esq empresa"><b>${esc(x.tk)}</b><span class="nome">${esc(porTicker.get(x.tk)?.nome ?? etf[x.tk]?.nome ?? '')}</span></td>
+      <td>${campoQtd(x.tk)}</td><td>${celPm(x)}</td><td>R$ ${num(x.p, 2)}</td>
+      <td>${ok(x.investido) ? dinheiro(x.investido) : '–'}</td><td>${x.q && ok(x.p) ? dinheiro(x.q * x.p) : '–'}</td>
+      <td>${sinal(x.variacao, v => pctSinal(v, 2))}</td><td>${ok(x.proventos) ? dinheiro(x.proventos) : '–'}</td>
+      <td>${sinal(x.retorno, v => `${v >= 0 ? '' : '−'}${dinheiro(Math.abs(v))}`)}</td><td>${sinal(x.rent, v => pctSinal(v, 2))}</td></tr>`).join('')}</tbody>
+  </table></div>`;
+}
+// Faixa de resumo de uma classe (ações, ETFs): como no topo de cada grupo de um consolidador
+function resumoClasse(c, tks, nome) {
+  const xs = tks.map(posicao).filter(x => x.q > 0 && ok(x.p));
+  if (!xs.length) return '';
+  const total = totaisCarteira(c).saldo, saldo = xs.reduce((s, x) => s + x.q * x.p, 0);
+  const comPm = xs.filter(x => ok(x.investido)), investido = comPm.reduce((s, x) => s + x.investido, 0);
+  const saldoPm = comPm.reduce((s, x) => s + x.saldo, 0), prov = comPm.reduce((s, x) => s + (x.proventos ?? 0), 0);
+  const renda = xs.reduce((s, x) => s + x.q * x.p * (porTicker.get(x.tk)?.dy ?? 0), 0);
+  const tile = (rot, val, sub = '', cls = '') => `<div><span>${rot}</span><b class="${cls}">${val}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  const parcial = comPm.length < xs.length ? `${comPm.length} de ${xs.length} com preço médio` : '';
+  return `<div class="ativo-numeros ativo-numeros-p" style="margin-top:12px">
+    ${tile(nome, String(xs.length), total ? `${pct(saldo / total, 1)} da carteira` : '')}
+    ${tile('Investido', investido ? dinheiro(investido) : '–', parcial)}
+    ${tile('Valor atual', dinheiro(saldo))}
+    ${investido ? tile('Variação', pctSinal(saldoPm / investido - 1, 2), '', classeSinal(saldoPm - investido)) : ''}
+    ${tile('Proventos', prov ? dinheiro(prov) : '–', 'das operações registradas')}
+    ${renda ? tile('Dividendos 12m', pct(renda / saldo, 2), `${pct(renda / saldo / 12, 2)} ao mês, em média`) : ''}
+    ${investido ? tile('Retorno da posição', pctSinal((saldoPm - investido + prov) / investido, 2), `${saldoPm - investido + prov >= 0 ? '' : '−'}${dinheiro(Math.abs(saldoPm - investido + prov))}`, classeSinal(saldoPm - investido + prov)) : ''}
+  </div>`;
+}
+
+// Janela do preço médio: como chegou nele, operações registradas e preço médio informado à mão
+let tkPm = null;
+function abrirJanelaPm(tk) {
+  tkPm = tk;
+  let dlg = $('#dlg-pm');
+  if (!dlg) {
+    dlg = document.createElement('dialog');
+    dlg.id = 'dlg-pm';
+    dlg.className = 'janela';
+    document.body.appendChild(dlg);
+    dlg.addEventListener('click', ev => { if (ev.target === dlg) dlg.close(); });
+  }
+  carregarPm([tk]);
+  desenharJanelaPm();
+  if (!dlg.open) dlg.showModal();
+}
+function desenharJanelaPm() {
+  const dlg = $('#dlg-pm'), tk = tkPm;
+  if (!dlg || !tk) return;
+  const x = posicao(tk), r = x.calc, ops = local.compras[tk] ?? [];
+  const nome = porTicker.get(tk)?.nome ?? etf[tk]?.nome ?? '';
+  const pmSemProv = r && r.cotas > 0 ? (r.custo - r.proventos - r.leilao) / r.cotas : null;
+  const linhaOp = (o, i) => `<tr data-op="${i}" style="cursor:default">
+    <td class="esq"><input class="campo" type="date" data-c="d" value="${esc(o.d ?? '')}" aria-label="Data"></td>
+    <td><select class="campo" data-c="t" aria-label="Tipo">${Object.entries({ c: 'Compra', v: 'Venda', s: 'Subscrição', b: 'Cotas recebidas' }).map(([k, v]) => `<option value="${k}" ${o.t === k ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
+    <td><input class="campo" type="number" min="0" step="any" data-c="q" value="${esc(o.q ?? '')}" placeholder="Cotas" style="width:90px" aria-label="Quantidade"></td>
+    <td><input class="campo" type="number" min="0" step="0.01" data-c="p" value="${esc(o.p ?? '')}" placeholder="R$" style="width:90px" aria-label="Preço por cota"></td>
+    <td><button class="botao" data-tirar="${i}" aria-label="Remover operação">×</button></td></tr>`;
+  const cotasFmt = v => num(v, Number.isInteger(Math.round(v * 1e6) / 1e6) ? 0 : 2);
+  const sinalR = v => (Math.abs(v) < 0.005 ? '—' : `${v > 0 ? '+' : '−'}${dinheiro(Math.abs(v))}`);
+  dlg.innerHTML = `<div class="janela-topo"><h3>Preço médio de ${esc(tk)}</h3><button class="botao" data-fechar aria-label="Fechar">×</button></div>
+  <div class="janela-corpo">
+    <p class="tile-sub" style="margin-top:0">${esc(nome)} · preço de hoje R$ ${num(x.p, 2)} · ${x.q ? `${cotasFmt(x.q)} cotas na carteira` : 'sem quantidade na carteira'}</p>
+    <div class="pm-opcoes">
+      <label class="pm-opcao ${x.manual ? '' : 'ativa'}"><input type="radio" name="pm-modo" value="auto" ${x.manual ? '' : 'checked'}>
+        <span><b>Calcular pelas operações</b><small>Compras, vendas, subscrições e cotas recebidas registradas abaixo, com bonificações, desdobramentos, frações e restituição de capital da B3.</small></span>
+        <b class="pm-valor">${x.carregando ? '…' : r ? `R$ ${num(r.pm, 2)}` : '–'}</b></label>
+      <label class="pm-opcao ${x.manual ? 'ativa' : ''}"><input type="radio" name="pm-modo" value="manual" ${x.manual ? 'checked' : ''}>
+        <span><b>Informar o preço médio</b><small>Vale no lugar do calculado. Os proventos só aparecem com as operações registradas.</small></span>
+        <span class="pm-valor">R$ <input class="campo" type="number" min="0" step="0.01" id="pm-manual" value="${esc(local.pm[tk] ?? '')}" style="width:100px" aria-label="Preço médio informado"></span></label>
+    </div>
+    ${x.difQtd != null ? `<div class="aviso" style="margin-top:12px">${ICONE_ALERTA}<div>As operações somam <b>${cotasFmt(x.difQtd)}</b> cotas hoje, e a carteira
+      tem ${cotasFmt(x.q)}. <button class="botao" id="pm-usar-qtd">Usar ${cotasFmt(x.difQtd)} cotas na carteira</button></div></div>` : ''}
+    <h3 class="secao">Operações</h3>
+    <div style="overflow-x:auto"><table><thead><tr><th class="esq">Data</th><th>Tipo</th><th>Cotas</th><th>Preço por cota</th><th></th></tr></thead>
+      <tbody>${ops.map(linhaOp).join('') || '<tr style="cursor:default"><td colspan="5" class="vazio esq">Nenhuma operação registrada neste aparelho.</td></tr>'}</tbody></table></div>
+    <button class="botao" id="pm-nova" style="margin-top:8px">Adicionar operação</button>
+    ${r ? `<h3 class="secao">Como chegamos no preço médio</h3>
+    <p style="margin:0 0 4px"><b>Preço médio de R$ ${num(r.pm, 2)}</b>: ${dinheiro(r.custo)} de custo ÷ ${cotasFmt(r.cotas)} cotas.</p>
+    <p class="tile-sub" style="margin:0 0 8px">Proventos desde a primeira operação: <b>${dinheiro(r.proventos)}</b>${r.leilao ? ` e ${dinheiro(r.leilao)} do leilão de frações (estimado)` : ''}${Math.abs(r.realizado) > 0.005 ? ` · resultado das vendas: ${sinalR(r.realizado)}` : ''}.
+      ${ok(pmSemProv) ? `Descontando os proventos, o preço médio cai para <b>R$ ${num(pmSemProv, 2)}</b>.` : ''}</p>
+    <div style="overflow-x:auto"><table><thead><tr><th class="esq">Data</th><th class="esq">O que aconteceu</th><th>Cotas</th><th>Custo</th><th>Cotas depois</th><th>Custo depois</th><th>PM depois</th></tr></thead>
+      <tbody>${r.passos.map(s => `<tr style="cursor:default"><td class="esq">${data(s.d)}</td>
+        <td class="esq">${esc(s.tipo)} <span class="setor">${esc(s.det)}</span>${s.nota ? `<span class="nome" style="display:block">${esc(s.nota)}</span>` : ''}</td>
+        <td>${s.dq > 0 ? '+' : s.dq < 0 ? '−' : ''}${s.dq ? cotasFmt(Math.abs(s.dq)) : '—'}</td><td>${sinalR(s.dc)}</td>
+        <td>${cotasFmt(s.cotas)}</td><td>${dinheiro(s.custo)}</td><td>R$ ${num(s.pm, 2)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+    <p class="tile-sub" style="margin:12px 0 0">O preço médio é o custo dividido pelas cotas. Compras somam custo e cotas; a venda tira cotas pelo
+      preço médio e não muda o preço médio. Bonificação e desdobramento dão cotas sem custo, e o preço médio cai; a fração que sobra
+      vai a leilão e sai pelo preço médio; restituição de capital abate o custo. Para o imposto de renda, a bonificação entra com o
+      custo que a empresa atribuir a cada ação nova; aqui ela entra sem custo. A B3 só informa os desdobramentos e bonificações
+      mais recentes: um evento antigo que não aparecer acima (ou a conversão de units) entra como "Cotas recebidas", com o custo
+      por cota, se houver. Os dados ficam só neste aparelho.${r?.falhou ? ' Os eventos e proventos deste ativo não carregaram: o cálculo usa só as operações.' : ''}</p>
+  </div>`;
+  // A carteira atrás da janela acompanha cada mudança (não depende do evento de fechar)
+  const salvarERedesenhar = () => { salvarLocal(); if ($('#cart-corpo')) desenharCarteiras(); desenharJanelaPm(); };
+  dlg.querySelector('[data-fechar]').addEventListener('click', () => dlg.close());
+  for (const i of dlg.querySelectorAll('input[name="pm-modo"]')) i.addEventListener('change', () => {
+    if (i.value === 'auto') delete local.pm[tk];
+    else { const v = Number($('#pm-manual').value); if (v > 0) local.pm[tk] = v; else { $('#pm-manual').focus(); return; } }
+    salvarERedesenhar();
+  });
+  $('#pm-manual').addEventListener('change', () => {
+    const v = Number($('#pm-manual').value);
+    if (v > 0) local.pm[tk] = v; else delete local.pm[tk];
+    salvarERedesenhar();
+  });
+  $('#pm-usar-qtd')?.addEventListener('click', () => { local.qtd[tk] = Math.round(x.difQtd * 1e6) / 1e6; salvarERedesenhar(); });
+  $('#pm-nova').addEventListener('click', () => {
+    (local.compras[tk] ??= []).push({ d: D.data_precos, t: 'c', q: null, p: null });
+    salvarERedesenhar();
+  });
+  for (const b of dlg.querySelectorAll('[data-tirar]')) b.addEventListener('click', () => {
+    local.compras[tk].splice(Number(b.dataset.tirar), 1);
+    if (!local.compras[tk].length) delete local.compras[tk];
+    salvarERedesenhar();
+  });
+  for (const i of dlg.querySelectorAll('tr[data-op] [data-c]')) i.addEventListener('change', () => {
+    const o = local.compras[tk][Number(i.closest('tr').dataset.op)];
+    o[i.dataset.c] = i.dataset.c === 'q' || i.dataset.c === 'p' ? (i.value === '' ? null : Number(i.value)) : i.value;
+    carregarPm([tk]);
+    salvarERedesenhar();
+  });
+}
+
 function blocoCdb() {
   const linhas = local.cdbs.map((c, i) => {
     const r = c.valor && c.data ? calcularCdb(c) : null;
@@ -2801,6 +3050,12 @@ function montarMetodo(el) {
         a 7–8%, comparar com a mediana desde 2020 exagera o desconto: uma ação podia parecer 40% abaixo do normal e estar só
         10–20% abaixo do que valeu nos últimos 2 anos, com juro parecido com o de hoje. Por isso o site usa sempre a régua mais
         exigente: preço normal e caro pela mediana e pelo percentil 75 menores, e "barata" só se for barata contra as duas.</p>
+      <h3>Preço médio e retorno da posição</h3>
+      <p>Na Carteira, a visualização "Posição e preço médio" mostra quanto foi investido, a variação, os proventos e o retorno
+        total de cada ativo. O preço médio vem das operações registradas no aparelho (ou de um valor informado à mão) e é ajustado
+        pelos eventos da B3 que muitos consolidadores ignoram: bonificação e desdobramento dão cotas sem custo e baixam o preço
+        médio; a fração que sobra sai pelo preço médio e o leilão entra como provento; restituição de capital abate o custo.
+        A janela "Como chegamos no preço médio" mostra cada passo, e também o preço médio descontando os proventos recebidos.</p>
       <h3>Selic de hoje e Selic esperada</h3>
       <p>A Selic de hoje não dura para sempre, então comparar tudo com ela supervaloriza o CDB. O site usa o Focus do Banco
         Central (mediana dos economistas para a Selic no fim de cada ano e para o IPCA de cada ano) e liga a Selic de hoje a
