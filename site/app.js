@@ -407,7 +407,23 @@ function blocoMercadoNoticias() {
   return `<div class="grafico-bloco" style="margin-bottom:12px"><h3>Por que o mercado se mexeu</h3>
     <div class="tile-sub">Ibovespa ${b ? `<span class="${classeSinal(b.var_dia)}">${pctSinal(b.var_dia)}</span>` : ''} em ${data(D.data_precos)} ·
       motivos citados por ao menos 2 veículos reconhecidos no dia</div>
-    ${fatos.length ? `<ul class="fatos">${fatos.map(f => linhaFato(f)).join('')}</ul>` : '<p class="vazio" style="margin:8px 0 0">Nenhum motivo confirmado por 2 fontes até agora.</p>'}</div>`;
+    ${fatos.length ? `<ul class="fatos">${fatos.map(f => linhaFato(f)).join('')}</ul>` : '<p class="vazio" style="margin:8px 0 0">Nenhum motivo confirmado por 2 fontes até agora.</p>'}</div>
+    ${blocoPolitica()}`;
+}
+// Política e contas públicas dos últimos dias: discurso, anúncio da Fazenda, votação. O que saiu depois do
+// fechamento (inclusive no fim de semana) é o que pesa no próximo pregão, então vem marcado.
+function blocoPolitica() {
+  const lista = NOTICIAS.POLITICA ?? [];
+  if (!lista.length) return '';
+  const desde = diaUtilAnterior(diaUtilAnterior(D.data_precos));
+  const recentes = lista.filter(f => f.d >= desde).sort((a, b) => b.d.localeCompare(a.d) || b.conf - a.conf);
+  const fatos = [...recentes.filter(confirmado), ...recentes.filter(f => !confirmado(f))].slice(0, 4)
+    .sort((a, b) => b.d.localeCompare(a.d) || b.conf - a.conf);
+  if (!fatos.length) return '';
+  const depois = f => f.d > D.data_precos ? '<span class="etiqueta etiqueta-movimento" title="Saiu depois do último pregão: pesa na próxima abertura">depois do fechamento</span>' : '';
+  return `<div class="grafico-bloco" style="margin-bottom:12px"><h3>Política e contas públicas</h3>
+    <div class="tile-sub">Discursos, anúncios da Fazenda e votações que mexem com juros, dólar e bolsa · últimos 3 dias úteis e o fim de semana</div>
+    <ul class="fatos">${fatos.map(f => linhaFato(f, depois(f))).join('')}</ul></div>`;
 }
 function secaoNoticias(e, tk) {
   const fatos = fatosDe(e, tk);
@@ -2168,7 +2184,9 @@ function montarMetodo(el) {
         de balanços começa em 2015; o de múltiplos, em 2020, porque antes disso a CVM não publica a quantidade de ações.</p>
       <h3>Notícias e movimentos</h3>
       <p>A cada atualização, o site busca as notícias das ações da carteira, das que mais se mexeram no dia e do mercado
-        (Ibovespa e dólar) no Google Notícias, com a busca dos próprios portais como reserva. Guarda só o título, o veículo, a data e o link.
+        (Ibovespa e dólar) no Google Notícias, com a busca dos próprios portais como reserva. Busca também política que mexe com
+        o mercado (discurso do presidente, anúncio da Fazenda, ajuste fiscal, votação no Congresso), só com títulos que falam de
+        economia; aí o "mesmo tema" é o mesmo assunto, e o que saiu depois do fechamento aparece marcado na página inicial. Guarda só o título, o veículo, a data e o link.
         As notícias são agrupadas por dia e tema (resultado, recomendação, fiscal e política, juros, exterior…).</p>
       <ul>
         <li><b>Confirmado</b> só quando dois ou mais veículos reconhecidos (InfoMoney, Valor, Estadão, Money Times, Exame, Folha, O Globo,

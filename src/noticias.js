@@ -53,6 +53,10 @@ export function temasMercado(titulo) {
   return achados.length ? achados : ['outros'];
 }
 
+// Buscas de política que mexe com o mercado; o título precisa tocar em economia para entrar
+const BUSCAS_POLITICA = ['Lula fiscal', 'Lula economia mercado', 'ministro da Fazenda', 'ajuste fiscal', 'Congresso votação economia'];
+const POLITICA_ECONOMIA = /fiscal|ajuste|gasto|or[cç]amento|\bmeta\b|d[ií]vida|imposto|tribut|isen[cç]|\bir\b|juros|selic|mercado|d[oó]lar|ibovespa|bolsa|economi|fazenda|banco central|reforma|privatiz|estata|super[aá]vit|d[eé]ficit|arcabou|contas p[uú]blicas|corte|pec\b|medida provis/i;
+
 // Nomes pelos quais a imprensa chama cada empresa (o código nem sempre está no título)
 const APELIDOS = {
   PSSA: ['porto'], TIMS: ['tim'], BBSE: ['bb seguridade'], BBAS: ['banco do brasil'], BBDC: ['bradesco'], ITSA: ['itausa'],
@@ -172,7 +176,10 @@ export async function atualizarNoticias(db) {
   criarTabelaNoticias(db);
   const ins = db.prepare(`INSERT OR IGNORE INTO noticias (chave, id, data, hora, fonte, titulo, link, tema) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
   // Mercado: as notícias do Ibovespa e do dólar trazem o motivo do dia (fiscal, juros, exterior...)
+  // Política: discurso do presidente, anúncio da Fazenda, votação no Congresso. Saem antes de virar
+  // manchete do Ibovespa (às vezes no fim de semana) e mexem com o pregão seguinte.
   const buscas = [['MERCADO', 'Ibovespa', null], ['MERCADO', 'dólar hoje', null],
+    ...BUSCAS_POLITICA.map(termo => ['POLITICA', termo, null]),
     ...codigosParaBuscar(db, config).map(({ tk, palavras }) => [tk, `"${tk}"`, palavras])];
   let novas = 0, viaPortais = 0, falhas = 0;
   for (const [chave, termo, palavras] of buscas) {
@@ -184,9 +191,11 @@ export async function atualizarNoticias(db) {
       // Na busca por código, o título precisa citar a empresa (o código, o nome ou o apelido):
       // o Google também devolve notícias que só mencionam o código no meio do texto
       if (palavras && !cita(n.titulo, palavras)) continue;
+      // Política só entra quando o título fala de economia (viagem, cúpula e agenda de governo ficam de fora)
+      if (chave === 'POLITICA' && (!POLITICA_ECONOMIA.test(n.titulo) || RESUMO.test(n.titulo))) continue;
       const fonte = veiculo(n.fonte) || 'portal';
       const id = `${semAcento(fonte)}|${semAcento(n.titulo).replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 90)}`;
-      const temas = chave === 'MERCADO' ? temasMercado(n.titulo) : [temaDe(n.titulo)];
+      const temas = chave === 'MERCADO' ? temasMercado(n.titulo) : chave === 'POLITICA' ? ['fiscal e política'] : [temaDe(n.titulo)];
       for (const tema of temas) {
         const r = ins.run(chave, temas.length > 1 ? `${id}|${tema}` : id, diaBr(n.ms), new Date(n.ms).toISOString().slice(11, 16), fonte, n.titulo, n.link, tema);
         novas += r.changes;
@@ -208,8 +217,19 @@ export function montarNoticias(db) {
   const saida = {};
   const linhas = db.prepare(`SELECT * FROM noticias WHERE data >= date('now', '-${DIAS_EXPORTAR} day') ORDER BY chave, data DESC, hora`).all();
   const grupos = new Map();
+  // Política: o mesmo dia tem vários assuntos (discurso, reunião na Fazenda, votação). Junta só os títulos
+  // que dividem ao menos 3 palavras significativas; assim "2 fontes" quer dizer 2 veículos no mesmo assunto.
+  const assuntos = new Map();
+  const significativas = t => new Set(semAcento(t).split(/[^a-z0-9]+/).filter(p => p.length >= 5));
+  const assuntoDe = n => {
+    const ps = significativas(n.titulo), lista = assuntos.get(n.data) ?? [];
+    let a = lista.find(x => [...ps].filter(p => x.ps.has(p)).length >= 3);
+    // Compara com o primeiro título do assunto (sem somar palavras, para não virar uma bola de neve)
+    if (!a) { a = { id: lista.length, ps }; lista.push(a); assuntos.set(n.data, lista); }
+    return a.id;
+  };
   for (const n of linhas) {
-    const k = `${n.chave}|${n.data}|${n.tema}`;
+    const k = n.chave === 'POLITICA' ? `${n.chave}|${n.data}|${assuntoDe(n)}` : `${n.chave}|${n.data}|${n.tema}`;
     if (!grupos.has(k)) grupos.set(k, []);
     grupos.get(k).push(n);
   }
@@ -232,7 +252,7 @@ export function montarNoticias(db) {
   const PESO = { resumo: -1, outros: 0 };
   for (const k of Object.keys(saida)) {
     saida[k].sort((a, b) => b.d.localeCompare(a.d) || (PESO[b.tema] ?? 1) - (PESO[a.tema] ?? 1) || b.conf - a.conf);
-    saida[k] = saida[k].slice(0, k === 'MERCADO' ? 40 : 20);
+    saida[k] = saida[k].slice(0, ['MERCADO', 'POLITICA'].includes(k) ? 40 : 20);
   }
   return saida;
 }
