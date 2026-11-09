@@ -104,6 +104,59 @@ const listaTickers = [...porTicker.keys()].sort();
 const etf = Object.fromEntries(D.etfs.map(e => [e.ticker, e]));
 const ipcaRef = D.empresas.find(e => ok(e.tesouro_ipca_ref))?.tesouro_ipca_ref;
 
+// ---------- Selic esperada (Focus) ----------
+// A Selic de hoje não vale para sempre. O caminho esperado liga a Selic de hoje às medianas do Focus para o
+// fim de cada ano, em linha reta entre elas (depois do último ano, fica no último valor); o IPCA de cada ano
+// vale para o ano inteiro. A média é composta: a taxa única ao ano que renderia o mesmo no período.
+const FOCUS = D.macro.focus;
+const DIA_MS = 86400000;
+const anosDepois = (iso, anos) => `${Number(iso.slice(0, 4)) + anos}${iso.slice(4)}`;
+function mediaEsperada(tipo, ate) {
+  if (!FOCUS || !D.macro.selic) return null;
+  const ini = Date.parse(D.data_precos), dias = Math.round((Date.parse(ate) - ini) / DIA_MS);
+  if (!(dias > 0)) return null;
+  const pts = [[ini, D.macro.selic.valor], ...FOCUS.selic.map(([a, v]) => [Date.UTC(a, 11, 31), v]).filter(p => p[0] > ini)];
+  const ipca = new Map(FOCUS.ipca), ipcaFim = FOCUS.ipca.at(-1)?.[1];
+  let ln = 0;
+  for (let k = 0; k < dias; k++) {
+    const t = ini + (k + 0.5) * DIA_MS;
+    let r;
+    if (tipo === 'ipca') r = ipca.get(new Date(t).getUTCFullYear()) ?? ipcaFim;
+    else {
+      const j = pts.findIndex(p => p[0] > t);
+      r = j < 0 ? pts.at(-1)[1] : pts[j - 1][1] + (pts[j][1] - pts[j - 1][1]) * (t - pts[j - 1][0]) / (pts[j][0] - pts[j - 1][0]);
+    }
+    ln += Math.log(1 + r / 100);
+  }
+  return Math.exp(ln / dias) - 1;
+}
+const selicMedia = anos => mediaEsperada('selic', anosDepois(D.data_precos, anos));
+// IR da renda fixa (tabela regressiva), cobrado uma vez no resgate; no Tesouro, também a custódia da B3 (0,20% a.a.)
+const aliquotaIr = dias => dias <= 180 ? 0.225 : dias <= 360 ? 0.2 : dias <= 720 ? 0.175 : 0.15;
+const CUSTODIA_TD = 0.002, CDI_ABAIXO_SELIC = 0.001;
+function liquidoAa(bruto, dias, custodia = 0) {
+  const anos = dias / 365, g = ((1 + bruto) * (1 - custodia)) ** anos;
+  return (1 + (g - 1) * (1 - aliquotaIr(dias))) ** (1 / anos) - 1;
+}
+// Travar no Tesouro (prefixado ou IPCA+) ou ficar no CDB 100% do CDI até a mesma data, pela Selic esperada
+function travarOuCdi() {
+  if (!FOCUS) return [];
+  const hoje = Date.parse(D.data_precos);
+  return (D.tesouro ?? []).filter(t => (t.titulo === 'Tesouro Prefixado' || t.titulo === 'Tesouro IPCA+') && ok(t.taxa))
+    .map(t => ({ ...t, dias: Math.round((Date.parse(t.vencimento) - hoje) / DIA_MS) }))
+    .filter(t => t.dias > 300 && t.dias <= 366 * 11)
+    .sort((a, b) => a.vencimento.localeCompare(b.vencimento) || a.titulo.localeCompare(b.titulo))
+    .map(t => {
+      const selic = mediaEsperada('selic', t.vencimento), ipca = mediaEsperada('ipca', t.vencimento);
+      const pre = t.titulo === 'Tesouro Prefixado';
+      const bruto = pre ? t.taxa / 100 : (1 + ipca) * (1 + t.taxa / 100) - 1;
+      const tesLiq = liquidoAa(bruto, t.dias, CUSTODIA_TD), cdbLiq = liquidoAa(selic - CDI_ABAIXO_SELIC, t.dias);
+      // Selic média que faria o CDB empatar: o IR é o mesmo nos dois, então basta empatar o bruto
+      const empate = (1 + bruto) * (1 - CUSTODIA_TD) - 1 + CDI_ABAIXO_SELIC;
+      return { ...t, pre, selic, ipca, tesLiq, cdbLiq, empate, real: (1 + tesLiq) / (1 + ipca) - 1 };
+    });
+}
+
 // "29/10/2026" no fechamento oficial; "03/11/2026 às 15:27 (parcial)" durante o pregão
 const horaParcial = PARCIAL?.hora
   ? new Date(PARCIAL.hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }) : null;
@@ -138,7 +191,7 @@ function montarTopo() {
   const b = etf.BOVA11, m = D.macro;
   const itens = [];
   if (b) itens.push(`Ibovespa (BOVA11) <b class="${classeSinal(b.ret_1m)}">${pctSinal(b.ret_1m)}</b> em 1 mês, <b>${pct(-b.distancia_maxima_52s, 0)}</b> abaixo do pico de 52 semanas`);
-  if (m.selic) itens.push(`Selic <b>${num(m.selic.valor, 2)}%</b>`);
+  if (m.selic) itens.push(`Selic <b>${num(m.selic.valor, 2)}%</b>${ok(selicMedia(3)) ? ` (média esperada em 3 anos <b>${pct(selicMedia(3), 2)}</b>)` : ''}`);
   if (m.ipca_12m) itens.push(`IPCA 12m <b>${num(m.ipca_12m.valor, 2)}%</b>`);
   if (ok(ipcaRef)) itens.push(`Tesouro IPCA+ ~10 anos <b>IPCA + ${num(ipcaRef, 2)}%</b>`);
   if (m.dolar) itens.push(`Dólar <b>R$ ${num(m.dolar.valor, 2)}</b>`);
@@ -342,7 +395,8 @@ function blocosMercado() {
       `${pctSinal(b.ret_1m)} no mês · ${pct(-b.distancia_maxima_52s, 0)} abaixo do pico`, '#etfs'),
     m.dolar && bloco('Dólar', `R$ ${num(m.dolar.valor, 2)}`, r ? `${pctSinal(m.dolar.valor / r.mediana - 1, 0)} contra a mediana de 12 meses` : '', '#etfs'),
     etf.IVVB11 && bloco('S&P 500 (IVVB11)', `<span class="${classeSinal(etf.IVVB11.var_dia)}">${pctSinal(etf.IVVB11.var_dia)}</span>`, `${pctSinal(etf.IVVB11.ret_12m, 0)} em 12 meses`, '#etfs'),
-    m.selic && bloco('Selic', `${num(m.selic.valor, 2)}%`, m.ipca_12m ? `IPCA 12 meses ${num(m.ipca_12m.valor, 2)}%` : '', '#etfs'),
+    m.selic && bloco('Selic', `${num(m.selic.valor, 2)}%`, [ok(selicMedia(3)) ? `média esperada em 3 anos ${pct(selicMedia(3), 2)}` : '',
+      m.ipca_12m ? `IPCA 12 meses ${num(m.ipca_12m.valor, 2)}%` : ''].filter(Boolean).join(' · '), '#etfs'),
     ok(ipcaRef) && bloco('Tesouro IPCA+', `${num(ipcaRef, 2)}%`, 'Taxa real do título de ~10 anos', '#etfs'),
   ].filter(Boolean).join('');
 }
@@ -2110,6 +2164,42 @@ async function exportarImagem(no, nome, aviso) {
   }
 }
 
+// A Selic esperada e a escolha entre travar taxa no Tesouro ou ficar no CDB até a mesma data
+function blocoSelicEsperada() {
+  if (!FOCUS || !D.macro.selic) return '';
+  const hoje = D.macro.selic.valor / 100, linhas = travarOuCdi();
+  const pp = x => `${x > 0 ? '+' : x < 0 ? '−' : ''}${num(Math.abs(x) * 100, 2)} p.p.`;
+  const tile = (rot, val, sub = '', dica = '') => `<div${dica ? ` title="${esc(dica)}"` : ''}><span>${rot}</span><b>${val}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  const parada = liquidoAa(hoje - CDI_ABAIXO_SELIC, 3 * 365), esperada = ok(selicMedia(3)) ? liquidoAa(selicMedia(3) - CDI_ABAIXO_SELIC, 3 * 365) : null;
+  return `<div class="grafico-bloco" style="margin-top:12px">
+    <h3>A Selic daqui para frente</h3>
+    <div class="tile-sub">Focus do Banco Central de ${data(FOCUS.data)}, mediana dos economistas para o fim de cada ano:
+      ${FOCUS.selic.map(([a, v]) => `${a}: ${num(v, 2)}%`).join(' · ')}. A média esperada é a taxa única ao ano que renderia o mesmo que esse caminho.</div>
+    <div class="ativo-numeros ativo-numeros-p" style="margin-top:10px">
+      ${tile('Selic hoje', pct(hoje, 2), `CDI ${pct(hoje - CDI_ABAIXO_SELIC, 2)}`)}
+      ${[1, 3, 5].map(a => tile(`Média em ${a} ano${a > 1 ? 's' : ''}`, pct(selicMedia(a), 2), `IPCA esperado ${pct(mediaEsperada('ipca', anosDepois(D.data_precos, a)), 1)} ao ano`)).join('')}
+    </div>
+    <p class="tile-sub" style="margin:10px 0 0">Num CDB de 100% do CDI por 3 anos, a Selic parada em ${pct(hoje, 2)} daria ${pct(parada, 2)} ao ano
+      líquido de IR; pelo caminho esperado, ${pct(esperada, 2)}. Quem compara ações ou Tesouro com a Selic de hoje superestima o CDB.</p>
+    ${linhas.length ? `<h3 style="margin-top:14px">Travar no Tesouro ou ficar no CDB?</h3>
+    <div class="tile-sub">Rendimento ao ano até o vencimento de cada título, líquido de IR (e da custódia de 0,20% a.a. da B3 no Tesouro),
+      contra um CDB de 100% do CDI pelo mesmo prazo. O IPCA+ usa o IPCA esperado pelo Focus.</div>
+    <div class="tabela-caixa" style="max-height:none"><table>
+      <thead><tr><th class="esq">Título</th><th>Tesouro</th><th>CDB 100%</th><th>Diferença</th>
+        <th title="Selic média até o vencimento que faria o CDB empatar com o título. Acima dela, o CDB ganha.">Empata se Selic média for</th></tr></thead>
+      <tbody>${linhas.map(t => `<tr style="cursor:default">
+        <td class="esq"><b>${t.pre ? 'Prefixado' : 'IPCA+'} ${t.vencimento.slice(0, 4)}</b> <span class="setor">${t.pre ? '' : 'IPCA + '}${num(t.taxa, 2)}% · ${num(t.dias / 365, 1)} anos</span></td>
+        <td>${pct(t.tesLiq, 2)}<span class="setor"> · ${pctSinal(t.real, 1)} real</span></td>
+        <td>${pct(t.cdbLiq, 2)}<span class="setor"> · Selic média ${pct(t.selic, 2)}</span></td>
+        <td class="${classeSinal(t.tesLiq - t.cdbLiq)}">${pp(t.tesLiq - t.cdbLiq)}</td>
+        <td>${pct(t.empate, 2)}</td></tr>`).join('')}
+      </tbody></table></div>
+    <p class="tile-sub" style="margin:10px 0 0">Os títulos pagam mais que a Selic esperada: o mercado cobra um prêmio pelo risco de os juros caírem
+      menos que o previsto (contas públicas, inflação). Se o Focus acertar, travar rende mais; o CDB só vence se a Selic média até o
+      vencimento ficar acima da última coluna. Tudo vale levando até o vencimento: vendido antes, o título pode render mais ou menos.</p>` : ''}
+  </div>`;
+}
+
 // ---------- ETFs e renda fixa ----------
 let periodoEtf = 3;
 // O que cada ETF acompanha; a cor segue o ETF (não a posição), para não mudar quando se esconde uma linha
@@ -2163,7 +2253,8 @@ function montarEtfs(el) {
         ${premios.map(e => `<tr data-ticker="${esc(e.ticker)}"><td class="esq"><b>${esc(e.ticker)}</b> <span class="setor">${esc(e.setor)}</span></td>
           <td>${pct(e.earnings_yield)}</td><td class="${classeSinal(e.premio_vs_tesouro)}">${e.premio_vs_tesouro > 0 ? '+' : ''}${num(e.premio_vs_tesouro * 100, 1)} p.p.</td><td>${e.nota_qualidade}</td></tr>`).join('')}
         </tbody></table></div>
-    </div>`;
+    </div>
+    ${blocoSelicEsperada()}`;
   for (const tr of el.querySelectorAll('tr[data-ticker]')) tr.addEventListener('click', () => irPara(`empresa/${tr.dataset.ticker}`));
   const desenhar = () => {
     const ultimoMes = D.series.CDI.at(-1)[0];
@@ -2710,6 +2801,13 @@ function montarMetodo(el) {
         a 7–8%, comparar com a mediana desde 2020 exagera o desconto: uma ação podia parecer 40% abaixo do normal e estar só
         10–20% abaixo do que valeu nos últimos 2 anos, com juro parecido com o de hoje. Por isso o site usa sempre a régua mais
         exigente: preço normal e caro pela mediana e pelo percentil 75 menores, e "barata" só se for barata contra as duas.</p>
+      <h3>Selic de hoje e Selic esperada</h3>
+      <p>A Selic de hoje não dura para sempre, então comparar tudo com ela supervaloriza o CDB. O site usa o Focus do Banco
+        Central (mediana dos economistas para a Selic no fim de cada ano e para o IPCA de cada ano) e liga a Selic de hoje a
+        essas medianas em linha reta. A média esperada é a taxa única ao ano que renderia o mesmo que esse caminho. Com ela, a
+        aba de ETFs e renda fixa compara, até o vencimento de cada título, o Tesouro travado (prefixado ou IPCA+, já sem IR e
+        custódia) com um CDB de 100% do CDI, e mostra a Selic média que faria o CDB empatar. As ações são comparadas com o
+        Tesouro IPCA+ de ~10 anos, cuja taxa já embute o caminho esperado dos juros.</p>
       <h3>Lucro que não se repete</h3>
       <p>Um P/L baixo pode vir de lucro inflado por um ganho único. O site procura esses ganhos de quatro jeitos:</p>
       <ul>

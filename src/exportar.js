@@ -65,6 +65,13 @@ export function exportar(db) {
   const macro = {
     selic: ultimo('selic_meta'), ipca_12m: ultimo('ipca_12m'), dolar: ultimo('dolar'),
     cdi_dia: ultimo('cdi'), tesouro_data: db.prepare('SELECT max(data) d FROM tesouro').get().d,
+    // Focus mais recente: Selic esperada no fim de cada ano e IPCA de cada ano
+    focus: (() => {
+      const serie = ind => db.prepare(`SELECT data, ano, mediana FROM expectativas WHERE indicador = ?
+        AND data = (SELECT max(data) FROM expectativas WHERE indicador = ?) ORDER BY ano`).all(ind, ind);
+      const selic = serie('Selic'), ipca = serie('IPCA');
+      return selic.length ? { data: selic[0].data, selic: selic.map(r => [r.ano, r.mediana]), ipca: ipca.map(r => [r.ano, r.mediana]) } : null;
+    })(),
     // Dólar de 12 meses: referência para saber se o IVVB11 está "inflado" pelo câmbio
     dolar_12m: (() => {
       const v = db.prepare("SELECT valor FROM macro WHERE serie = 'dolar' AND data >= date('now', '-365 day') ORDER BY valor").all().map(r => r.valor);

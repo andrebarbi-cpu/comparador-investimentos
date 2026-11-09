@@ -57,6 +57,29 @@ async function atualizarSerie(db, serie, cod, anoInicio) {
   log(`Macro ${serie}: ${n} pontos novos`);
 }
 
+// Focus: o que os economistas consultados pelo Banco Central esperam para a Selic e o IPCA nos próximos
+// anos. A Selic não fica no patamar de hoje para sempre; a comparação entre CDB (pós) e Tesouro (travado)
+// usa o caminho esperado. baseCalculo 0 = todas as respostas dos últimos 30 dias.
+export async function atualizarFocus(db) {
+  const q = new URLSearchParams({
+    $top: '300', $format: 'json', $orderby: 'Data desc',
+    $filter: "(Indicador eq 'Selic' or Indicador eq 'IPCA') and baseCalculo eq 0",
+    $select: 'Indicador,Data,DataReferencia,Mediana',
+  });
+  const url = `https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/ExpectativasMercadoAnuais?${q.toString().replace(/\+/g, '%20')}`;
+  let resp;
+  for (let i = 1; i <= 4; i++) {
+    resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
+    if (resp.status < 500) break;
+    await new Promise(r => setTimeout(r, 3000 * i));
+  }
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const dados = (await resp.json()).value ?? [];
+  const ins = db.prepare('INSERT OR REPLACE INTO expectativas (indicador, data, ano, mediana) VALUES (?, ?, ?, ?)');
+  transacao(db, () => { for (const r of dados) ins.run(r.Indicador, r.Data, Number(r.DataReferencia), r.Mediana); });
+  log(`Focus: ${dados.length} expectativas (última pesquisa ${dados[0]?.Data ?? '?'})`);
+}
+
 export async function atualizarTesouro(db, anoInicio) {
   const url = 'https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/PrecoTaxaTesouroDireto.csv';
   const arq = await baixar(url, 'tesouro/PrecoTaxaTesouroDireto.csv', { forcar: true });

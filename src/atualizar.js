@@ -5,7 +5,7 @@
 import { abrirDb } from './db.js';
 import { atualizarCadastro, atualizarDemonstracoes, atualizarCapitalFre } from './cvm.js';
 import { carregarAno, atualizarDiario } from './b3.js';
-import { atualizarBcb, atualizarTesouro } from './macro.js';
+import { atualizarBcb, atualizarTesouro, atualizarFocus } from './macro.js';
 import { calcular } from './calcular.js';
 import { exportar } from './exportar.js';
 import { atualizarIntraday } from './intraday.js';
@@ -43,6 +43,8 @@ if (intraday) {
   try { await atualizarItrDoDia(db); } catch (e) { log('ITR do dia indisponível agora:', e.message); }
   // Notícias das ações acompanhadas e do mercado, para explicar quedas e altas (falha não para nada)
   try { await atualizarNoticias(db); } catch (e) { log('Notícias indisponíveis agora:', e.message); }
+  // Focus sai uma vez por dia útil; uma consulta só, então vale também aqui
+  try { await atualizarFocus(db); } catch (e) { log('Focus indisponível agora:', e.message); }
 } else {
   await etapa('cadastro', () => atualizarCadastro(db, ano));
   if (cargaInicial) {
@@ -65,6 +67,8 @@ if (intraday) {
   await etapa('proventos', () => atualizarProventos(db));
   await etapa('Banco Central', () => atualizarBcb(db, ANO_INICIO));
   await etapa('Tesouro', () => atualizarTesouro(db, ANO_INICIO));
+  // Selic e IPCA esperados (Focus); fora do ar, o site segue com a pesquisa anterior
+  try { await atualizarFocus(db); } catch (e) { log('Focus indisponível agora:', e.message); }
   await etapa('entregas de resultados à CVM', () => atualizarEntregas(db));
   await etapa('ITR do dia (direto da CVM)', () => atualizarItrDoDia(db));
   // Susep, Anatel e ONS: dados do setor que saem antes do balanço (só baixa o que mudou)

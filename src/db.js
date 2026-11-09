@@ -84,6 +84,16 @@ CREATE TABLE IF NOT EXISTS macro (
   PRIMARY KEY (serie, data)
 ) WITHOUT ROWID;
 
+-- Expectativas do mercado (Focus, Banco Central): mediana da Selic no fim de cada ano e do IPCA
+-- de cada ano, como publicadas em cada data
+CREATE TABLE IF NOT EXISTS expectativas (
+  indicador TEXT,       -- 'Selic' ou 'IPCA'
+  data TEXT,            -- data da pesquisa
+  ano INTEGER,          -- ano a que a expectativa se refere
+  mediana REAL,         -- % a.a. (Selic no fim do ano; IPCA acumulado no ano)
+  PRIMARY KEY (indicador, data, ano)
+) WITHOUT ROWID;
+
 -- Taxas do Tesouro Direto (régua de renda fixa)
 CREATE TABLE IF NOT EXISTS tesouro (
   titulo TEXT,
