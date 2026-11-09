@@ -4,8 +4,10 @@
 //   indicadores          a foto de hoje de cada empresa: indicadores, notas, selos e alertas
 //   etfs                 retorno e risco dos ETFs comparados com o CDI
 import { pathToFileURL } from 'node:url';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { abrirDb, transacao } from './db.js';
-import { log } from './util.js';
+import { log, RAIZ } from './util.js';
 import { criarTabelasProventos, classeTicker, fatorAte } from './proventos.js';
 import { criarTabelaEntregas } from './entregas.js';
 
@@ -122,6 +124,19 @@ export function calcular(db) {
     if (!proventosPorClasse.has(k)) proventosPorClasse.set(k, []);
     proventosPorClasse.get(k).push(p);
   }
+
+  // Ganhos não recorrentes que os totais da CVM não separam (config/lucro-recorrente.json)
+  const arqRecorrente = join(RAIZ, 'config', 'lucro-recorrente.json');
+  const ajustesRecorrente = existsSync(arqRecorrente) ? JSON.parse(readFileSync(arqRecorrente, 'utf8')).empresas ?? {} : {};
+  // Manchete de resultado que fala em ganho não recorrente: sinal para conferir quando não há ajuste listado
+  // (dividendo extraordinário e assembleia extraordinária não contam)
+  const NAO_RECORRENTE = /n[aã]o[- ]recorrente|(ganho|lucro|efeito|resultado) extraordin[aá]ri|cr[eé]dito (fiscal|tribut|de pis)|pis.?cofins|venda de (participa|fatia|ativo|im[oó]ve|\d)|ganho (de capital|cont[aá]bil)/i;
+  const manchetesNaoRecorrente = new Map();
+  try {
+    for (const n of db.prepare(`SELECT chave, data, titulo FROM noticias WHERE data >= date('now', '-120 day')
+        AND tema IN ('resultado', 'operação societária', 'outros') ORDER BY data DESC`).all())
+      if (NAO_RECORRENTE.test(n.titulo) && !manchetesNaoRecorrente.has(n.chave)) manchetesNaoRecorrente.set(n.chave, n);
+  } catch { /* sem tabela de notícias */ }
 
   const historico = [];
   const fotos = [];
@@ -310,6 +325,26 @@ export function calcular(db) {
         if (bases.length) lucroNormal = Math.max(0, Math.min(t.lucro_contr, ...bases));
       }
     }
+    // Ganho não recorrente que não aparece nem como lucro acima do operacional nem como alíquota baixa
+    // (caso Multiplan, 2026: venda de participação em shopping lançada como receita e crédito de PIS/COFINS).
+    // Vale a lista curada; o lucro recorrente substitui o de 12 meses no P/L contra o histórico.
+    const ajustes = (ajustesRecorrente[emp.cnpj]?.ajustes ?? [])
+      .filter(a => a.trimestre > menosAnos(b.dt_refer, 1) && a.trimestre <= b.dt_refer);
+    const ganhoNaoRecorrente = ajustes.reduce((s, a) => s + a.valor, 0);
+    let plRecorrente = null;
+    if (ajustes.length && t.lucro_contr > 0) {
+      const recorrente = Math.max(0, t.lucro_contr - ganhoNaoRecorrente);
+      lucroSuspeito = true;
+      lucroNormal = lucroNormal != null ? Math.min(lucroNormal, recorrente) : recorrente;
+      plRecorrente = lucroNormal > 0 ? m.vm / lucroNormal : null;
+      alertas.push(`Lucro de 12 meses (R$ ${br(t.lucro_contr / 1e6, 0)} mi) inclui ganhos não recorrentes de cerca de R$ ${br(ganhoNaoRecorrente / 1e6, 0)} mi depois de IR: `
+        + ajustes.map(a => `${a.descricao} (${rotuloTri(a.trimestre)}, R$ ${br(a.valor / 1e6, 0)} mi${a.estimativa ? ', estimado' : ''})`).join('; ')
+        + `. Lucro recorrente ~R$ ${br(lucroNormal / 1e6, 0)} mi${plRecorrente ? `, P/L recorrente ${br(plRecorrente, 1)}` : ''}`);
+    }
+    const manchete = !ajustes.length ? tks.map(tk => manchetesNaoRecorrente.get(tk)).find(Boolean) : null;
+    if (manchete) alertas.push(`Notícia de ${dataBr(manchete.data)} cita ganho não recorrente ("${manchete.titulo.slice(0, 120)}"): confira se o lucro de 12 meses está inflado`);
+    const histPlRec = plRecorrente != null ? percentilProprio('pl', plRecorrente) : null;
+    const histPlRec2a = plRecorrente != null ? percentilProprio('pl', plRecorrente, menosAnos(hoje, 2), 18) : null;
 
     // Variação de 12 meses do código principal, ajustada por desdobramento, grupamento e bonificação
     // (sem o ajuste, o desdobramento de 1:5 da SBSP3 aparecia como queda de 82%)
@@ -411,12 +446,16 @@ export function calcular(db) {
       graham_margem: graham ? graham / precoRef - 1 : null,
       bazin_margem: dy3a != null ? dy3a / 0.06 - 1 : null,
       lucro_suspeito: lucroSuspeito ? 1 : 0, lucro_normalizado: lucroNormal,
+      // Lucro sem os ganhos não recorrentes da lista curada e o P/L por ele
+      ganho_nao_recorrente: ajustes.length ? ganhoNaoRecorrente : null,
+      ganho_nao_recorrente_itens: ajustes.length ? JSON.stringify(ajustes.map(a => ({ tri: rotuloTri(a.trimestre), valor: a.valor, descricao: a.descricao, estimativa: !!a.estimativa, fonte: a.fontes?.[0] ?? null }))) : null,
+      pl_recorrente: plRecorrente, pl_rec_percentil: histPlRec?.pct ?? null, pl_rec_percentil_2a: histPlRec2a?.pct ?? null,
       resultado_pendente: resultadoPendente ? `${rotuloTri(resultadoPendente.dt_refer)}|${resultadoPendente.dt_entrega}` : null,
       lucro_tri_var: lucroTriVar,
       aliquota_tri: aliquotaTri, aliquota_media: aliquotaMedia,
       // Motivos para conferir antes de confiar no "barata": a página troca "lucro intacto" por "conferir"
       conferir: [resultadoPendente && 'resultado novo fora da base', lucroTriVar != null && lucroTriVar < -0.3 && 'lucro do último trimestre caiu',
-        efeitoFiscal && 'efeito fiscal no lucro',
+        efeitoFiscal && 'efeito fiscal no lucro', ajustes.length && 'ganho não recorrente no lucro', manchete && 'imprensa cita não recorrente',
         dividendoExtra && 'dividendo extraordinário', quedaForte && 'queda forte do preço'].filter(Boolean).join(' | ') || null,
       queda_3m: quedaAcao, queda_3m_ibov: quedaIbov,
       elegivel: liquidez >= LIQUIDEZ_MINIMA && !desatualizado && t.lucro_contr != null ? 1 : 0,
@@ -622,8 +661,10 @@ function pontuar(grupo, financeiras) {
 
   for (const f of grupo) {
     const consistencia = f.anos_lucro_base ? 100 * f.anos_lucro / f.anos_lucro_base : null;
-    // P/L contra o histórico também usa o lucro inflado: com lucro suspeito vale só o EV/EBIT (operacional)
-    const pctHist = f.lucro_suspeito ? pctRegua(f, 'ev_ebit') : pctRegua(f, 'pl') ?? pctRegua(f, 'ev_ebit');
+    // P/L contra o histórico também usa o lucro inflado: com lucro suspeito vale o P/L pelo lucro recorrente
+    // (lista curada) ou, sem ele, o EV/EBIT (operacional)
+    const pctHist = f.pl_recorrente != null ? pctRegua(f, 'pl_rec')
+      : f.lucro_suspeito ? pctRegua(f, 'ev_ebit') : pctRegua(f, 'pl') ?? pctRegua(f, 'ev_ebit');
     const baratoVsHistorico = pctHist != null ? 100 - pctHist : null;
     f.nota_qualidade = media(financeiras
       ? [P.roe(f), consistencia]
@@ -660,16 +701,18 @@ function marcarOportunidades(fotos, db) {
     f.tesouro_ipca_ref = ipca ?? null;
     f.premio_vs_tesouro = f.earnings_yield != null && ipca != null ? f.earnings_yield - ipca / 100 : null;
 
+    // Com ganho não recorrente conhecido (lista curada), vale o P/L pelo lucro recorrente
+    const usaRec = f.pl_recorrente != null && f.pl_rec_percentil != null;
     const usaPl = f.pl_percentil != null;
-    const pctHist = usaPl ? pctRegua(f, 'pl') : pctRegua(f, 'ev_ebit');
-    const ok =f.elegivel && f.lucro_12m > 0 && pctHist != null && pctHist <= 25 && !f.alertas.includes('desdobramento') && !f.lucro_suspeito
+    const pctHist = usaRec ? pctRegua(f, 'pl_rec') : usaPl ? pctRegua(f, 'pl') : pctRegua(f, 'ev_ebit');
+    const ok =f.elegivel && f.lucro_12m > 0 && pctHist != null && pctHist <= 25 && !f.alertas.includes('desdobramento') && (!f.lucro_suspeito || usaRec)
       && f.nota_qualidade >= 60 && (f.financeira || f.nota_saude >= 50);
     f.oportunidade = ok ? 1 : 0;
     f.nota_oportunidade = ok ? Math.round(0.5 * media([f.nota_qualidade, f.nota_saude]) + 0.5 * (100 - pctHist)) : null;
     if (ok) {
-      const campo = usaPl ? 'P/L' : 'EV/EBIT';
-      const atual = usaPl ? f.pl : f.ev_ebit, med = usaPl ? f.pl_mediana : f.ev_ebit_mediana;
-      const med2a = usaPl ? f.pl_mediana_2a : f.ev_ebit_mediana_2a;
+      const campo = usaRec ? 'P/L recorrente' : usaPl ? 'P/L' : 'EV/EBIT';
+      const atual = usaRec ? f.pl_recorrente : usaPl ? f.pl : f.ev_ebit, med = usaPl || usaRec ? f.pl_mediana : f.ev_ebit_mediana;
+      const med2a = usaPl || usaRec ? f.pl_mediana_2a : f.ev_ebit_mediana_2a;
       const contra = (m, quando) => `${br(m, 1)} ${quando} (${Math.round(100 * (atual / m - 1))}%)`;
       f.motivo = `${campo} ${br(atual, 1)} contra mediana de ${contra(med, 'desde 2020')}`
         + (med2a != null ? ` e ${contra(med2a, 'nos últimos 2 anos')}` : '')

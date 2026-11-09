@@ -1,0 +1,52 @@
+{
+  "_leia": [
+    "Ganhos não recorrentes que entram no lucro sem aparecer como alíquota baixa: venda de imóvel ou",
+    "participação registrada como receita, crédito de PIS/COFINS, reversão de provisão. Os totais da CVM",
+    "não separam esses itens, então eles ficam listados aqui, com fonte.",
+    "Cada item: trimestre (data do balanço), valor DEPOIS de IR em R$ (positivo infla o lucro), descrição,",
+    "se é estimativa e as fontes. O cálculo tira do lucro de 12 meses os itens dos 4 trimestres mais recentes",
+    "e usa o resultado (lucro recorrente) no P/L contra o histórico, nas notas e na oportunidade.",
+    "Itens com trimestre fora dos 12 meses do último balanço deixam de valer sozinhos."
+  ],
+  "empresas": {
+    "07.816.890/0001-53": {
+      "ticker": "MULT3",
+      "ajustes": [
+        {
+          "trimestre": "2026-03-31",
+          "valor": 110000000,
+          "descricao": "venda de 10% do BH Shopping por R$ 285 mi",
+          "estimativa": true,
+          "nota": "Pelo FFO: R$ 327,5 mi reportado (+18% a/a); sem a venda teria caído ~22% a/a (~R$ 216 mi). A Genial estima lucro ajustado de R$ 270 mi (efeito de ~R$ 46 mi); vale o FFO, mais conservador.",
+          "fontes": [
+            "https://www.moneytimes.com.br/multiplan-mult3-fecha-1o-trimestre-com-lucro-de-r-316-milhoes-acima-do-esperado/",
+            "https://analisa.genialinvestimentos.com.br/acoes/multiplan/multiplan-mult3-resultado-1t26-cenario-robusto-com-ressalvas/"
+          ]
+        },
+        {
+          "trimestre": "2026-06-30",
+          "valor": 167000000,
+          "descricao": "crédito de PIS/COFINS de ~R$ 253 mi antes de IR",
+          "estimativa": false,
+          "nota": "Crédito de ~R$ 253 mi pela revisão da metodologia de apropriação; tributado a 34%, efeito líquido de ~R$ 167 mi (Genial).",
+          "fontes": [
+            "https://timesbrasil.com.br/brasil/multiplan-tem-lucro-de-r-427-milhoes-no-trimestre-e-registra-terceiro-maior-resultado-da-historia/",
+            "https://analisa.genialinvestimentos.com.br/acoes/multiplan/multiplan-mult3-previa-2t26-operacao-solida-com-efeito-fiscal-nao-recorrente",
+            "https://www.empiricus.com.br/artigos/investimentos/multiplan-mult3-operacao-no-2t26-mostra-se-consistente-com-impulso-de-efeitos-nao-recorrentes-jtak/"
+          ]
+        },
+        {
+          "trimestre": "2026-09-30",
+          "valor": 175000000,
+          "descricao": "venda de 9,33% do ParkShopping Barigui por R$ 250 mi",
+          "estimativa": true,
+          "nota": "Pelo FFO: R$ 405,3 mi reportado contra ~R$ 230 mi ajustado (Empiricus).",
+          "fontes": [
+            "https://www.empiricus.com.br/artigos/investimentos/multiplan-mult3-operacao-segue-resiliente-no-3t26-acoes-valem-a-pena-jdnm/",
+            "https://investidor10.com.br/noticias/lucro-da-multiplan-mult3-dispara-no-3t26-e-chega-a-r-383-milhoes-123606/"
+          ]
+        }
+      ]
+    }
+  }
+}

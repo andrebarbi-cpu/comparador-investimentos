@@ -142,7 +142,12 @@ function codigosParaBuscar(db, config) {
     for (const r of db.prepare('SELECT nome, tickers FROM indicadores').all())
       for (const t of (r.tickers ?? '').split(' ')) nomes.set(t, r.nome);
   } catch { /* sem indicadores: só o código e os apelidos */ }
-  return [...new Set([...carteira, ...acompanhar, ...movidas])].map(tk => ({ tk, palavras: palavrasDe(tk, nomes.get(tk)) }));
+  // Oportunidades do site: a notícia é o que mostra um lucro inflado que o balanço não separa
+  // (Multiplan, 2026: venda de participação em shopping lançada como receita)
+  let oportunidades = [];
+  try { oportunidades = db.prepare('SELECT ticker FROM indicadores WHERE oportunidade = 1').all().map(r => r.ticker); }
+  catch { /* primeira execução */ }
+  return [...new Set([...carteira, ...acompanhar, ...movidas, ...oportunidades])].map(tk => ({ tk, palavras: palavrasDe(tk, nomes.get(tk)) }));
 }
 
 // Fatos relevantes e comunicados ao mercado de todas as empresas com nota no site. Comunicados de rotina

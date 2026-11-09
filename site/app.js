@@ -82,6 +82,8 @@ const porCnpj = new Map();
 for (const e of D.empresas) {
   porCnpj.set(e.cnpj, e);
   for (const t of e.tickers.split(' ')) porTicker.set(t, e);
+  // P/L que vale contra a régua: o recorrente quando há ganho não recorrente listado (config/lucro-recorrente.json)
+  e.pl_uso = ok(e.pl_recorrente) ? e.pl_recorrente : e.pl;
   e.regua = reguaPl(e);
   e.pl_pct_regua = e.regua.pct;
 }
@@ -92,7 +94,7 @@ for (const e of D.empresas) {
 // mediana e pelo percentil 75 MENORES, e "mais barato que" pelo percentil MAIOR.
 function reguaPl(e) {
   const menor = (a, b) => ok(a) && ok(b) ? Math.min(a, b) : (ok(a) ? a : b);
-  const pcts = [e.pl_percentil, e.pl_percentil_2a].filter(ok);
+  const pcts = (ok(e.pl_recorrente) ? [e.pl_rec_percentil, e.pl_rec_percentil_2a] : [e.pl_percentil, e.pl_percentil_2a]).filter(ok);
   const mediana = menor(e.pl_mediana, e.pl_mediana_2a);
   return { mediana, p25: menor(e.pl_p25, e.pl_p25_2a), p75: menor(e.pl_p75, e.pl_p75_2a),
     pct: pcts.length ? Math.max(...pcts) : null,
@@ -828,7 +830,7 @@ const COLUNAS_CARTEIRA = [
   { k: 'peso', r: 'Peso', v: l => l.saldo },
   { k: 'dy', r: 'Div. 12m', v: l => l.e?.dy, dica: 'Dividendos e JCP pagos nos últimos 12 meses sobre o preço' },
   { k: 'renda', r: 'Renda/ano', v: l => l.renda, dica: 'Quantidade × preço × dividendos dos últimos 12 meses' },
-  { k: 'pl', r: 'P/L × mediana', v: l => ok(l.e?.pl) && ok(l.e?.regua.mediana) ? l.e.pl / l.e.regua.mediana : null, dica: 'P/L de hoje × mediana (a menor entre desde 2020 e últimos 2 anos); ordena pelo desconto' },
+  { k: 'pl', r: 'P/L × mediana', v: l => ok(l.e?.pl_uso) && ok(l.e?.regua.mediana) ? l.e.pl_uso / l.e.regua.mediana : null, dica: 'P/L de hoje × mediana (a menor entre desde 2020 e últimos 2 anos); ordena pelo desconto' },
   { k: 'normal', r: 'Normal', v: l => ok(l.g.normal) ? l.g.normal / l.p - 1 : null, dica: 'Preço com o P/L mediano (a menor entre desde 2020 e últimos 2 anos), supondo o lucro de hoje; ordena pela distância até ele' },
   { k: 'caro', r: 'Caro', v: l => ok(l.g.caro) ? l.g.caro / l.p - 1 : null, dica: 'Preço com o P/L do percentil 75 (o menor entre desde 2020 e últimos 2 anos), supondo o lucro de hoje' },
   { k: 'nota', r: 'Nota', v: l => l.e?.nota_geral },
@@ -855,7 +857,7 @@ function blocoAcoes(c) {
       <td class="${classeSinal(variacao(tk, 365))}">${pctSinal(variacao(tk, 365))}</td>
       <td>${q ? dinheiro(saldo) : '–'}</td><td>${q && total ? pct(saldo / total, 0) : '–'}</td>
       <td>${pct(e?.dy)}</td><td>${q ? dinheiro(renda) : '–'}</td>
-      <td>${ok(e?.pl) && ok(e?.regua.mediana) ? `${num(e.pl)} <span class="setor">× ${num(e.regua.mediana)}</span>` : '–'}</td>
+      <td>${ok(e?.pl_uso) && ok(e?.regua.mediana) ? `${num(e.pl_uso)}${ok(e.pl_recorrente) ? '<sup title="P/L pelo lucro recorrente, sem ganho não recorrente">rec.</sup>' : ''} <span class="setor">× ${num(e.regua.mediana)}</span>` : '–'}</td>
       <td>${celulaAlvo(g.normal, p)}</td><td>${celulaAlvo(g.caro, p)}</td>
       <td>${medidor(e?.nota_geral)}</td><td class="esq situacao">${situacao(l)}</td>${combinado ? `<td>${medidor(combinado.get(l))}</td>` : ''}</tr>`; }).join('')}</tbody>
   </table></div>
@@ -1159,7 +1161,8 @@ function gatilhoAcao(tk, e, p) {
   // P/L muito acima do próprio "caro" quase sempre é lucro que despencou (prejuízo pontual), não preço alto
   if (ok(e.pl_p75) && e.pl > 2 * e.pl_p75) return { st: 'P/L distorcido: o lucro de 12 meses despencou', ehTrade,
     tese: [`P/L ${num(e.pl)} contra ${num(e.pl_p75)} no caro histórico; a regra de preço não serve até o lucro normalizar`] };
-  const alvo = x => ok(x) ? p * x / e.pl : null;
+  const plU = e.pl_uso;
+  const alvo = x => ok(x) ? p * x / plU : null;
   const piso = pisos[e.setor] ?? pisos.padrao;
   const tese = [];
   if (ok(piso) && ok(e.roe) && e.roe < piso) tese.push(`ROE ${pct(e.roe, 0)} abaixo do piso de ${pct(piso, 0)}`);
@@ -1174,19 +1177,35 @@ function gatilhoAcao(tk, e, p) {
   if (motivos.includes('lucro do último trimestre caiu')) tese.push(`lucro do último trimestre ${pctSinal(e.lucro_tri_var, 0)} contra um ano antes: os 12 meses ainda não mostram toda a piora`);
   if (motivos.includes('dividendo extraordinário')) tese.push(`dividendo de 12 meses (${pct(e.dy, 0)}) bem acima do normal (${pct(e.dy_mediana, 0)}): inclui pagamento extraordinário, não conte com ele`);
   if (motivos.includes('efeito fiscal no lucro')) tese.push(`lucro do último trimestre inflado por imposto baixo (alíquota ${pct(e.aliquota_tri, 0)} contra ${pct(e.aliquota_media, 0)} normal): o recorrente é menor`);
+  if (motivos.includes('ganho não recorrente no lucro')) tese.push(`lucro de 12 meses tem ${dinheiro(e.ganho_nao_recorrente)} de ganho não recorrente: pelo recorrente o P/L é ${num(e.pl_recorrente)}, não ${num(e.pl)}`);
+  if (motivos.includes('imprensa cita não recorrente')) tese.push('a imprensa cita ganho não recorrente no último resultado: confira se o lucro de 12 meses está inflado');
   if (motivos.includes('queda forte do preço')) tese.push(`caiu ${pct(-e.queda_3m, 0)} em 3 meses (Ibovespa ${pctSinal(e.queda_3m_ibov, 0)}): o mercado pode estar antecipando lucro menor`);
   const conferirAntes = !!pendente || motivos.some(m => m !== 'dividendo extraordinário');
   const quebrada = tese.some(t => t.startsWith('ROE') || t.startsWith('dividendo caiu'));
   let st;
   const r = e.regua;
-  if (e.pl >= r.p75) st = ehTrade ? '↑ Cara: realizar o restante' : (e.dy < (e.dy_mediana ?? 0) ? '↑ Cara e com dividendo abaixo do normal: reduzir' : '↑ Cara: parar de aportar');
-  else if (e.pl >= r.mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
-  else if (e.pl <= r.p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes'
+  if (plU >= r.p75) st = ehTrade ? '↑ Cara: realizar o restante' : (e.dy < (e.dy_mediana ?? 0) ? '↑ Cara e com dividendo abaixo do normal: reduzir' : '↑ Cara: parar de aportar');
+  else if (plU >= r.mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
+  else if (plU <= r.p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes'
     : pendente ? '↓ Em promoção, mas falta o resultado novo: conferir antes'
     : conferirAntes ? '↓ Em promoção, mas com sinal de piora: conferir antes' : '↓ Em promoção com lucro intacto';
   else st = 'Abaixo do normal: segurar';
   return { normal: alvo(r.mediana), caro: alvo(r.p75), st, tese, ehTrade, pendente: !!pendente, conferir: conferirAntes };
 }
+// Ganho não recorrente que o balanço não separa (lista curada em config/lucro-recorrente.json): os itens,
+// o lucro recorrente e o P/L por ele, com link para a fonte de cada número
+function avisoNaoRecorrente(e) {
+  if (!ok(e.ganho_nao_recorrente)) return '';
+  let itens = [];
+  try { itens = JSON.parse(e.ganho_nao_recorrente_itens ?? '[]'); } catch { /* campo malformado: só o total */ }
+  return `<div class="aviso">${ICONE_ALERTA}<div><strong>Lucro inflado por ganho não recorrente:</strong> dos ${dinheiro(e.lucro_12m)} de lucro em 12 meses,
+    cerca de ${dinheiro(e.ganho_nao_recorrente)} (depois de IR) não se repetem. Pelo lucro recorrente de ~${dinheiro(e.lucro_normalizado)}, o P/L é
+    <b>${num(e.pl_recorrente)}</b>, não ${num(e.pl)}: é ele que vale contra o histórico, nas notas e na oportunidade.
+    ${itens.length ? `<ul style="margin:6px 0 0 18px;padding:0">${itens.map(i => `<li>${esc(i.tri)}: ${esc(i.descricao)}, ${dinheiro(i.valor)}${i.estimativa ? ' (estimado)' : ''}${i.fonte ? ` · <a href="${esc(i.fonte)}" target="_blank" rel="noopener">fonte</a>` : ''}</li>`).join('')}</ul>` : ''}</div></div>`;
+}
+// Alertas da ficha sem repetir o do ganho não recorrente, que já tem aviso próprio com os itens
+const alertasFicha = e => !ok(e.ganho_nao_recorrente) ? e.alertas
+  : (e.alertas ?? '').split(' | ').filter(a => !a.includes('inclui ganhos não recorrentes')).join(' | ');
 // Texto de aviso quando o resultado da temporada já saiu (pela agenda) e ainda não está na base
 function resultadoForaDaBase(e) {
   // Pela entrega à CVM (vale para todas as empresas); a agenda manual cobre se a consulta falhar
@@ -1562,15 +1581,16 @@ function montarAtivo(el, ticker) {
     <section class="ativo-secao" id="s-resumo"><h3 class="secao">Resumo</h3>
       ${blocoUltimoResultado(e)}
       ${e.oportunidade ? `<div class="aviso aviso-info"><div><strong>Por que é oportunidade:</strong> ${esc(e.motivo)}.</div></div>` : ''}
+      ${avisoNaoRecorrente(e)}
       ${!e.elegivel ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Fora do ranking:</strong> ${(e.liquidez ?? 0) < 1e6 ? 'negocia menos de R$ 1 mi por dia' : 'balanço atrasado ou sem lucro informado'}, por isso não recebe nota.</div></div>` : ''}
-      ${e.alertas ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Atenção</strong>${listaAlertas(e.alertas)}</div></div>` : ''}
+      ${alertasFicha(e) ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Atenção</strong>${listaAlertas(alertasFicha(e))}</div></div>` : ''}
       <div class="blocos">
         <div class="bloco"><h3>Notas (0 a 100)</h3><div class="notas-ficha">
           ${[['Geral', e.nota_geral], ['Qualidade', e.nota_qualidade], ['Preço', e.nota_preco], ...(fin ? [] : [['Saúde', e.nota_saude]]), ['Crescimento', e.nota_crescimento]]
             .map(([r, v]) => `<div class="medidor"><span>${r}</span>${ok(v) ? `<i style="--v:${v}%"></i><span>${v}</span>` : '<span class="vazio">–</span>'}</div>`).join('')}
           ${e.magica_posicao ? `<div class="tile-sub">Fórmula Mágica: ${e.magica_posicao}ª posição</div>` : ''}</div></div>
         <div class="bloco"><h3>Preço contra o próprio histórico</h3><dl class="lista">
-          ${linha('P/L hoje', num(e.pl), EXPLICA['P/L'])}${linha('Mediana desde 2020', num(e.pl_mediana), 'O P/L típico da própria empresa desde 2020. Inclui 2020–2022, com juro real perto de zero, quando qualquer lucro valia mais.')}
+          ${linha('P/L hoje', num(e.pl), EXPLICA['P/L'])}${ok(e.pl_recorrente) ? linha('P/L recorrente', `<b>${num(e.pl_recorrente)}</b>`, 'P/L pelo lucro de 12 meses sem os ganhos não recorrentes (venda de ativo, crédito fiscal). É ele que vale contra o histórico, nas notas e na oportunidade.') : ''}${linha('Mediana desde 2020', num(e.pl_mediana), 'O P/L típico da própria empresa desde 2020. Inclui 2020–2022, com juro real perto de zero, quando qualquer lucro valia mais.')}
           ${linha('Mediana dos últimos 2 anos', num(e.pl_mediana_2a), 'O P/L típico nos últimos 24 meses, com juros no patamar de hoje (Tesouro IPCA+ perto de 7–8%). É a referência mais justa quando o juro está alto.')}
           ${linha('Faixa barata–cara', ok(e.regua.p25) ? `${num(e.regua.p25)} a ${num(e.regua.p75)}` : '–', 'Percentis 25 e 75 do P/L mês a mês (os menores entre desde 2020 e últimos 2 anos): abaixo do primeiro está barata; acima do segundo, cara.')}
           ${linha('Mais barato que em', ok(e.regua.pct) ? `${num(100 - e.regua.pct, 0)}% dos meses` : '–', 'Em quantos meses o P/L esteve mais alto que hoje, pela régua mais exigente (desde 2020 ou últimos 2 anos).')}
@@ -2223,6 +2243,19 @@ function montarMetodo(el) {
         a 7–8%, comparar com a mediana desde 2020 exagera o desconto: uma ação podia parecer 40% abaixo do normal e estar só
         10–20% abaixo do que valeu nos últimos 2 anos, com juro parecido com o de hoje. Por isso o site usa sempre a régua mais
         exigente: preço normal e caro pela mediana e pelo percentil 75 menores, e "barata" só se for barata contra as duas.</p>
+      <h3>Lucro que não se repete</h3>
+      <p>Um P/L baixo pode vir de lucro inflado por um ganho único. O site procura esses ganhos de quatro jeitos:</p>
+      <ul>
+        <li><b>Lucro acima do operacional</b> ou mais de 3 vezes a média dos 3 anos anteriores: as notas usam um lucro normalizado
+          e o preço contra o histórico passa a usar o EV/EBIT.</li>
+        <li><b>Imposto baixo no trimestre</b> (alíquota efetiva muito abaixo da média): marcado como efeito fiscal.</li>
+        <li><b>Ganho que o balanço não separa</b>, como venda de participação lançada como receita ou crédito de PIS/COFINS: o
+          balanço da CVM não mostra esses itens à parte, então eles ficam numa lista com fonte (config/lucro-recorrente.json).
+          Quando a empresa está nela, o site mostra o <b>P/L recorrente</b> e o usa contra o histórico, nas notas e na oportunidade.
+          Caso que motivou: Multiplan em 2026, com P/L de 8,6 no lucro contábil e cerca de 12 no recorrente.</li>
+        <li><b>Imprensa citando "não recorrente"</b> no resultado de uma empresa que não está na lista: ela fica marcada para conferir.
+          Por isso o site também busca as notícias de todas as ações que aparecem como oportunidade.</li>
+      </ul>
       <h3>Selos clássicos</h3>
       <ul>
         <li><b>Graham:</b> preço abaixo de √(22,5 × lucro por ação × patrimônio por ação).</li>
