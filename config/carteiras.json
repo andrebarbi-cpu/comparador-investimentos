@@ -134,8 +134,8 @@
       {
         "ticker": "BBAS3",
         "data": "2026-11-11",
-        "quando": "",
-        "confirmado": false
+        "quando": "após o fechamento",
+        "confirmado": true
       },
       {
         "ticker": "BPAC11",
