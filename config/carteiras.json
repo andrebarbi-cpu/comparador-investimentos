@@ -18,7 +18,8 @@
         "ALUP4",
         "MDIA3",
         "POMO4",
-        "VIVT3"
+        "VIVT3",
+        "CURY3"
       ],
       "etfs": [
         "IVVB11",
@@ -70,7 +71,8 @@
     },
     "trade": [
       "BPAC11",
-      "BBDC4"
+      "BBDC4",
+      "CURY3"
     ],
     "rebalancear_ivvb": {
       "_leia": "Só sugere vender IVVB11 para comprar Brasil quando o movimento é expressivo: dólar X acima da mediana de 12 meses OU peso do IVVB11 passando do topo da faixa por Y pontos.",
