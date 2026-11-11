@@ -337,7 +337,7 @@ function montarInicio(el) {
   const t = c ? totaisCarteira(c) : { saldo: 0 };
   const temQtd = t.saldo > 0;
   modoMapa ??= temQtd ? 'carteira' : 'bolsa';
-  const oport = D.empresas.filter(e => e.oportunidade && !naCarteira.has(e.cnpj) && perene(e) && grande(e))
+  const oport = D.empresas.filter(e => e.oportunidade && perene(e) && grande(e))
     .sort((a, b) => b.nota_oportunidade - a.nota_oportunidade).slice(0, 3);
   el.innerHTML = `
     <div class="inicio-topo"><div><h2>${saudacao}</h2>
@@ -632,15 +632,14 @@ const MODOS_OPORT = {
 let modoOport = 'foco';
 
 function montarOportunidades(el) {
-  // Fora da carteira e sem setores voláteis (varejo), salvo nota excepcional
+  // Sem setores voláteis (varejo), salvo nota excepcional. As que já estão na carteira continuam aqui,
+  // com o selo "Na carteira": o site é de todos, e cada um decide quanto já tem de cada uma
   const evitar = new Set(REGRA.setores_evitar ?? []), excecao = REGRA.nota_minima_excecao ?? 101;
   const todas = D.empresas.filter(e => e.oportunidade).sort((a, b) => b.nota_oportunidade - a.nota_oportunidade);
-  const daCarteira = todas.filter(e => naCarteira.has(e.cnpj));
-  const ocultas = todas.filter(e => !naCarteira.has(e.cnpj) && evitar.has(e.setor) && e.nota_oportunidade < excecao);
-  const candidatas = todas.filter(e => !naCarteira.has(e.cnpj) && !ocultas.includes(e));
+  const ocultas = todas.filter(e => evitar.has(e.setor) && e.nota_oportunidade < excecao);
+  const candidatas = todas.filter(e => !ocultas.includes(e));
   const porModo = Object.fromEntries(Object.entries(MODOS_OPORT).map(([k, [, f]]) => [k, candidatas.filter(f)]));
   const lista = porModo[modoOport];
-  const linkTk = e => `<a href="#empresa/${esc(e.ticker)}">${esc(e.ticker)}</a>`;
   const bi = v => num(v / 1e9, 0);
   const corte = `valor de mercado a partir de R$ ${bi(FOCO.valor_mercado_minimo)} bi (bancos e seguradoras: R$ ${bi(FOCO.valor_mercado_minimo_financeiras)} bi)`;
   const explicacao = {
@@ -663,7 +662,6 @@ function montarOportunidades(el) {
       ${Object.entries(MODOS_OPORT).map(([k, [r]]) => `<button data-modo="${k}" aria-pressed="${k === modoOport}">${r} (${porModo[k].length})</button>`).join('')}
     </span></div>
     <p class="contagem" style="margin:0 0 10px">${explicacao}
-      ${daCarteira.length ? `Da carteira, ${daCarteira.map(linkTk).join(', ')} também aparece${daCarteira.length > 1 ? 'm' : ''} como oportunidade (veja a aba Carteiras).` : ''}
       ${ocultas.length ? `${ocultas.length} de varejo ficaram de fora por terem nota abaixo de ${excecao}.` : ''}</p>
     <div class="cartoes">${lista.map(cartaoOportunidade).join('') || `<p class="vazio">${modoOport === 'foco'
       ? 'Nenhuma empresa grande de setor perene está barata contra o próprio histórico hoje. Veja “Empresas grandes”.'

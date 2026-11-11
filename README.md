@@ -114,7 +114,8 @@ podem ser apagados quando quiser.
   financeiras contam juntos; seguradoras são um setor à parte, porque as cotações delas andam
   pouco com as dos bancos. Acima de `concentracao.limite_setor` (hoje,
   40%) aparece um alerta.
-- **Oportunidades** mostram só o que não está na carteira. Setores em `setores_evitar` (hoje,
+- **Oportunidades** incluem as empresas que já estão na carteira, com o selo "Na carteira": cada
+  pessoa decide quanto já tem de cada uma. Setores em `setores_evitar` (hoje,
   varejo) só aparecem com nota de oportunidade a partir de `nota_minima_excecao` (hoje, 90).
 - **Foco** (visão padrão das oportunidades e filtro "Só empresas grandes" do ranking): setores
   perenes de `foco.setores` e valor de mercado mínimo de R$ 5 bi, ou R$ 20 bi para bancos e
