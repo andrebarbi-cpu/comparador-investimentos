@@ -110,8 +110,9 @@ podem ser apagados quando quiser.
   dólar contra a mediana de 12 meses (rebalancear o IVVB11) e, por ação, preço "normal" (P/L
   mediano) e "caro" (percentil 75) com sinais de tese quebrada (ROE abaixo do piso, dividendo
   cortado, payout acima de 100%). P/L acima do dobro do "caro" é tratado como lucro distorcido.
-- **Concentração por setor:** barra com a fatia de cada setor no saldo. Bancos, seguradoras e
-  holdings financeiras contam juntos como Financeiro. Acima de `concentracao.limite_setor` (hoje,
+- **Concentração por setor:** barra com a fatia de cada setor no saldo. Bancos e holdings
+  financeiras contam juntos; seguradoras são um setor à parte, porque as cotações delas andam
+  pouco com as dos bancos. Acima de `concentracao.limite_setor` (hoje,
   40%) aparece um alerta.
 - **Oportunidades** mostram só o que não está na carteira. Setores em `setores_evitar` (hoje,
   varejo) só aparecem com nota de oportunidade a partir de `nota_minima_excecao` (hoje, 90).

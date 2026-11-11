@@ -1524,8 +1524,12 @@ function resultadoForaDaBase(e) {
 // Preço-alvo com a distância do preço de hoje
 const celulaAlvo = (alvo, p) => ok(alvo) ? `R$ ${num(alvo, 2)}<span class="nome" style="display:block">${Math.abs(alvo / p - 1) < 0.005 ? 'no preço' : pctSinal(alvo / p - 1, 0)}</span>` : '–';
 
-// Fatia de cada setor no saldo. Bancos, seguradoras e holdings financeiras contam juntos,
-// porque o risco é o mesmo (juros, crédito, política). ETF, Tesouro e CDB aparecem como classes.
+// Fatia de cada setor no saldo. Bancos e holdings financeiras (Itaúsa é quase só Itaú) contam juntos.
+// Seguradoras ficam no setor delas: em 2 anos de retornos diários a correlação banco–seguradora foi 0,35,
+// igual à de banco com telecom, e a das seguradoras entre si 0,47 (medido em 11/11/2026).
+// ETF, Tesouro e CDB aparecem como classes.
+const setorConcentracao = e => !e?.setor ? 'Outros'
+  : e.financeira && !/seguradoras/i.test(e.setor) ? 'Bancos e holdings financeiras' : e.setor;
 function itensConcentracao(c) {
   const grupos = new Map();
   const somar = (nome, valor, ativo, acao) => {
@@ -1536,7 +1540,7 @@ function itensConcentracao(c) {
     grupos.set(nome, g);
   };
   if (c.acoes) for (const l of linhasAcoes(c)) {
-    somar(l.e?.financeira ? 'Financeiro (bancos e seguros)' : l.e?.setor ?? 'Outros', l.saldo, l.tk, true);
+    somar(setorConcentracao(l.e), l.saldo, l.tk, true);
   }
   for (const tk of c.etfs ?? []) somar(`ETF (${tk})`, (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0), tk, false);
   for (const t of c.tesouro ?? []) {

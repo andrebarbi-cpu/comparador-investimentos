@@ -54,7 +54,7 @@
     }
   ],
   "concentracao": {
-    "_leia": "Aviso na aba Carteiras quando um setor de ações passa desta fatia do saldo (0,4 = 40%). Bancos, seguradoras e holdings financeiras contam juntos como Financeiro.",
+    "_leia": "Aviso na aba Carteiras quando um setor de ações passa desta fatia do saldo (0,4 = 40%). Bancos e holdings financeiras contam juntos; seguradoras são um setor à parte.",
     "limite_setor": 0.4
   },
   "regras": {
