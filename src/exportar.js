@@ -82,7 +82,8 @@ export function exportar(db) {
   // Carteiras acompanhadas: cotações diárias dos últimos ~400 dias, histórico dos títulos do
   // Tesouro e o CDI diário (para calcular CDBs a partir da data de aplicação)
   const config = JSON.parse(readFileSync(join(RAIZ, 'config', 'carteiras.json'), 'utf8'));
-  const acompanhados = [...new Set(config.carteiras.flatMap(c => [...(c.acoes ?? []), ...(c.etfs ?? [])]))];
+  const acompanhados = [...new Set(config.carteiras.flatMap(c => [...(c.acoes ?? []), ...(c.etfs ?? []), ...(c.bdrs ?? []).map(b => b.ticker)]))];
+  const bdrs = [...new Set(config.carteiras.flatMap(c => (c.bdrs ?? []).map(b => b.ticker)))];
   const desde = new Date(Date.now() - 400 * 86400000).toISOString().slice(0, 10);
   // Ajustadas por desdobramento, grupamento e bonificação: a variação de 12 meses e a do dia não saltam
   criarTabelasProventos(db);
@@ -141,7 +142,7 @@ export function exportar(db) {
 
   // Arquivos por ativo e, de cada código (inclusive os secundários, como ALUP4 e ALUP3), o último
   // preço e as variações do dia e de 12 meses: a página do ativo usa o preço do código aberto
-  const tickers = exportarAtivos(db, empresas, etfs.map(e => e.ticker));
+  const tickers = exportarAtivos(db, empresas, [...etfs.map(e => e.ticker), ...bdrs]);
 
   const dados = {
     gerado_em: new Date().toISOString(),
@@ -162,7 +163,7 @@ export function exportar(db) {
   log(`Exportado site/dados.js (${(texto.length / 1024).toFixed(0)} KB)`);
 }
 
-// Um arquivo por código de negociação (site/ativos/ITSA4.json; os ETFs também, para o simulador de carteira), lido pela página do ativo só quando
+// Um arquivo por código de negociação (site/ativos/ITSA4.json; os ETFs também, para o simulador de carteira, e os BDRs da carteira, para o preço médio), lido pela página do ativo só quando
 // ela abre: cotação diária desde 2016 e proventos, ajustados por desdobramento, grupamento e bonificação.
 //   precos: [data, fechamento ajustado]
 //   proventos: [data com, pagamento, tipo, valor como declarado, valor ajustado, preço na data com]

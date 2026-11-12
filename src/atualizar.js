@@ -36,6 +36,8 @@ const modo = cargaInicial ? 'carga-inicial' : intraday ? 'intraday' : 'diaria';
 log({ 'carga-inicial': `Carga inicial desde ${ANO_INICIO}`, intraday: 'Preços durante o pregão', diaria: 'Atualização diária' }[modo]);
 
 if (intraday) {
+  // BDR recém-incluído na carteira: busca o histórico já, sem esperar a atualização da noite
+  try { await atualizarEtfsExternos(db, { soNovos: true }); } catch (e) { log('Cotações externas indisponíveis agora:', e.message); }
   await etapa('preços do pregão', () => atualizarIntraday(db));
   // Resultado entregue à CVM hoje: a página avisa que os números ainda são do trimestre anterior
   try { await atualizarEntregas(db); } catch (e) { log('Entregas à CVM indisponíveis agora:', e.message); }
@@ -60,7 +62,7 @@ if (intraday) {
     }
     await etapa('cotações', () => atualizarDiario(db));
   }
-  await etapa('ETFs fora do arquivo da B3', () => atualizarEtfsExternos(db));
+  await etapa('ETFs e BDRs fora do arquivo da B3', () => atualizarEtfsExternos(db));
   // Aumentos de capital, bonificações e desdobramentos que ainda não chegaram ao balanço
   await etapa('Formulário de Referência', () => atualizarCapitalFre(db, ano));
   // Dividendos, JCP e desdobramentos por ação (B3); uma vez por dia

@@ -3,13 +3,14 @@
 // substituída à noite pelo fechamento oficial da B3 (mesma chave ticker + data).
 import { log } from './util.js';
 import { transacao } from './db.js';
+import { bdrsAcompanhados } from './externos.js';
 
 const URL_LOTE = 'https://query1.finance.yahoo.com/v7/finance/spark';
 const POR_LOTE = 20;
 const ETFS = ['IVVB11', 'WRLD11', 'BOVA11', 'AUVP11', 'AUPO11'];
 
 // Tickers que importam: em cada empresa, o mais negociado de cada classe (ON, PN, UNIT) nos
-// últimos 3 meses, mais os ETFs. Basta para recalcular valor de mercado e múltiplos.
+// últimos 3 meses, mais os ETFs e os BDRs da carteira. Basta para recalcular valor de mercado e múltiplos.
 function tickersRelevantes(db) {
   const linhas = db.prepare(`SELECT t.ticker, t.cnpj, t.classe, avg(c.volume) vol FROM tickers t
     JOIN cotacoes c ON c.ticker = t.ticker AND c.data >= date('now', '-90 day') AND c.parcial IS NULL
@@ -19,7 +20,7 @@ function tickersRelevantes(db) {
     const chave = `${l.cnpj}|${l.classe}`;
     if (!melhor.has(chave) || l.vol > melhor.get(chave).vol) melhor.set(chave, l);
   }
-  return [...new Set([...[...melhor.values()].map(l => l.ticker), ...ETFS])];
+  return [...new Set([...[...melhor.values()].map(l => l.ticker), ...ETFS, ...bdrsAcompanhados()])];
 }
 
 const dataEmSaoPaulo = segundos => new Date((segundos - 3 * 3600) * 1000).toISOString().slice(0, 10);

@@ -66,6 +66,10 @@ podem ser apagados quando quiser.
   À noite o arquivo oficial da B3 substitui esses preços e as linhas parciais são apagadas.
 - **ETFs fora do arquivo da B3:** o COTAHIST não traz ETFs de renda fixa. O AUPO11 vem do Yahoo
   Finanças (`src/externos.js`), só com pregões já fechados oficialmente.
+- **BDRs na carteira:** o lote padrão do COTAHIST deixou de trazer BDR em outubro de 2022. Os BDRs
+  listados em `config/carteiras.json` (chave `bdrs`) seguem o mesmo caminho do AUPO11: histórico e
+  preço do pregão pelo Yahoo Finanças. Na aba Carteiras aparecem junto dos ETFs e contam na fatia
+  global; não têm página de análise nem entram nas oportunidades.
 - Linhas do balanço abaixo do 2º nível não são padronizadas. Capex e dividendos pagos são
   identificados pela descrição da conta, então são aproximações.
 

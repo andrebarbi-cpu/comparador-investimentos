@@ -381,7 +381,7 @@ function totaisCarteira(c) {
   let saldo = 0, renda = 0, dia = 0, bolsa = 0;
   const somarBolsa = (tk, valor) => { bolsa += valor; const v = variacao(tk, 1); if (ok(v)) dia += valor * v / (1 + v); };
   if (c.acoes) for (const l of linhasAcoes(c)) { saldo += l.saldo; renda += l.renda; somarBolsa(l.tk, l.saldo); }
-  for (const tk of c.etfs ?? []) { const v = (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0); saldo += v; somarBolsa(tk, v); }
+  for (const tk of foraDe(c)) { const v = (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0); saldo += v; somarBolsa(tk, v); }
   for (const t of c.tesouro ?? []) saldo += (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (infoTesouro(t).pu ?? 0);
   if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) saldo += calcularCdb(cdb).bruto;
   return { saldo, renda, dia, bolsa };
@@ -561,11 +561,12 @@ function agendaSemana() {
 function desenharMapa(el, c) {
   let itens, legenda;
   if (modoMapa === 'carteira' && c) {
-    const lista = [...(c.acoes ?? []).map(tk => ({ tk, e: porTicker.get(tk) })), ...(c.etfs ?? []).map(tk => ({ tk, etf: true }))]
+    const lista = [...(c.acoes ?? []).map(tk => ({ tk, e: porTicker.get(tk) })), ...foraDe(c).map(tk => ({ tk, etf: true }))]
       .map(x => ({ ...x, v: variacao(x.tk, 1), valor: (local.qtd[x.tk] ?? 0) * (precoAtual(x.tk) ?? 0) }));
     const comQtd = lista.some(x => x.valor > 0);
     itens = (comQtd ? lista.filter(x => x.valor > 0) : lista.map(x => ({ ...x, valor: 1 })));
-    legenda = comQtd ? 'Ações e ETFs da carteira; tamanho = quanto você tem' : 'Ações e ETFs da carteira (preencha as quantidades para o tamanho seguir o saldo)';
+    const quais = bdrsDe(c).length ? 'Ações, ETFs e BDRs' : 'Ações e ETFs';
+    legenda = comQtd ? `${quais} da carteira; tamanho = quanto você tem` : `${quais} da carteira (preencha as quantidades para o tamanho seguir o saldo)`;
   } else {
     itens = D.empresas.filter(e => e.elegivel && ok(e.var_dia) && e.vm > 0).sort((a, b) => b.vm - a.vm).slice(0, 40)
       .map(e => ({ tk: e.ticker, e, v: e.var_dia, valor: e.vm }));
@@ -584,7 +585,7 @@ function desenharMapa(el, c) {
         : `color-mix(in srgb, var(${x.v > 0 ? '--mapa-alta' : '--mapa-baixa'}) ${Math.round(18 + 72 * forca)}%, var(--superficie-2))`;
       const cabe = x.w > 54 && x.h > 34, grande = x.w > 110 && x.h > 64;
       return `<button class="mapa-caixa ${forca > 0.45 ? 'forte' : ''}" style="left:${x.x}px;top:${x.y}px;width:${x.w}px;height:${x.h}px;background:${cor}"
-        data-ir="${x.etf ? 'etfs' : `empresa/${esc(x.tk)}`}" title="${esc(x.tk)}${x.e ? ' · ' + esc(x.e.nome) : ''}: ${pctSinal(x.v)}">
+        data-ir="${x.etf ? (nomeBdr[x.tk] ? 'carteiras' : 'etfs') : `empresa/${esc(x.tk)}`}" title="${esc(x.tk)}${x.e ? ' · ' + esc(x.e.nome) : nomeBdr[x.tk] ? ' · ' + esc(nomeBdr[x.tk]) + ' (BDR)' : ''}: ${pctSinal(x.v)}">
         ${cabe ? `<b style="font-size:${grande ? '1rem' : '.78rem'}">${esc(x.tk)}</b><span>${pctSinal(x.v)}</span>` : ''}</button>`;
     }).join('');
     for (const b of el.querySelectorAll('[data-ir]')) b.addEventListener('click', () => irPara(b.dataset.ir));
@@ -770,6 +771,11 @@ function importar(codigo) {
 
 const CARTEIRAS = D.config?.carteiras ?? [];
 const naCarteira = new Set(CARTEIRAS.flatMap(c => (c.acoes ?? []).map(t => porTicker.get(t)?.cnpj)).filter(Boolean));
+// ETFs e BDRs da carteira andam juntos: mesmas tabelas e mesma fatia ("global") nas faixas
+const bdrsDe = c => (c.bdrs ?? []).map(b => b.ticker);
+const foraDe = c => [...(c.etfs ?? []), ...bdrsDe(c)];
+const nomeBdr = Object.fromEntries(CARTEIRAS.flatMap(c => (c.bdrs ?? []).map(b => [b.ticker, b.nome])));
+const rotuloFora = c => (bdrsDe(c).length ? 'ETFs e BDRs' : 'ETFs');
 const serie = tk => D.precos?.[tk] ?? [];
 // Códigos fora da carteira (e secundários, como ALUP4) usam o resumo D.tickers: [preço, dia, 12 meses, data]
 const precoAtual = tk => serie(tk).at(-1)?.[1] ?? D.tickers?.[tk]?.[0] ?? null;
@@ -834,8 +840,8 @@ function desenharCarteiras() {
       <div class="blocos" id="resumo-${esc(c.id)}"></div>
       <h3 class="secao">Ativos</h3>
       ${local.visao === 'posicao' ? `${c.acoes?.length ? resumoClasse(c, c.acoes, 'Ações') + tabelaPosicao(c, c.acoes, true) : ''}
-        ${c.etfs?.length ? resumoClasse(c, c.etfs, 'ETFs') + tabelaPosicao(c, c.etfs, false) : ''}`
-        : `${c.acoes?.length ? blocoAcoes(c) : ''}${c.etfs?.length ? blocoEtfs(c) : ''}`}
+        ${foraDe(c).length ? resumoClasse(c, foraDe(c), rotuloFora(c)) + tabelaPosicao(c, foraDe(c), false) : ''}`
+        : `${c.acoes?.length ? blocoAcoes(c) : ''}${foraDe(c).length ? blocoEtfs(c) : ''}`}
       ${c.tesouro?.length ? blocoTesouro(c) : ''}
       ${c.cdb ? blocoCdb() : ''}
       <h3 class="secao">Análise</h3>
@@ -843,7 +849,7 @@ function desenharCarteiras() {
       ${blocoGatilhos(c)}
     </section>`).join('');
   for (const c of CARTEIRAS) resumoCarteira(c);
-  if (local.visao === 'posicao') carregarPm(CARTEIRAS.flatMap(c => [...(c.acoes ?? []), ...(c.etfs ?? [])]));
+  if (local.visao === 'posicao') carregarPm(CARTEIRAS.flatMap(c => [...(c.acoes ?? []), ...foraDe(c)]));
   for (const b of corpo.querySelectorAll('[data-visao]')) b.addEventListener('click', () => { local.visao = b.dataset.visao; salvarLocal(); desenharCarteiras(); });
   for (const b of corpo.querySelectorAll('[data-pm]')) b.addEventListener('click', ev => { ev.stopPropagation(); abrirJanelaPm(b.dataset.pm); });
   for (const i of corpo.querySelectorAll('input.qtd')) i.addEventListener('change', () => {
@@ -941,15 +947,18 @@ function alertasCarteira(linhas) {
 }
 function blocoEtfs(c) {
   return `<div class="tabela-caixa" style="max-height:none;margin-top:12px"><table>
-    <thead><tr><th class="esq">ETF</th><th>Qtd.</th><th>Preço</th><th>Dia</th><th>1 mês</th><th>12 meses</th>
+    <thead><tr><th class="esq">${bdrsDe(c).length ? 'ETF ou BDR' : 'ETF'}</th><th>Qtd.</th><th>Preço</th><th>Dia</th><th>1 mês</th><th>12 meses</th>
       <th>CDI 12m</th><th>Do pico 52s</th><th>Saldo</th></tr></thead>
-    <tbody>${c.etfs.filter(tk => !local.soTenho || local.qtd[tk] > 0).map(tk => {
+    <tbody>${foraDe(c).filter(tk => !local.soTenho || local.qtd[tk] > 0).map(tk => {
       const e = etf[tk], q = local.qtd[tk] ?? 0, p = precoAtual(tk) ?? e?.preco;
-      return `<tr style="cursor:default"><td class="esq"><b>${esc(tk)}</b></td><td>${campoQtd(tk)}</td><td>R$ ${num(p, 2)}</td>
+      // BDR não está na tabela de ETFs: a distância do pico sai da própria série (desde a estreia, se tiver menos de um ano)
+      const s = serie(tk).filter(x => x[0] >= new Date(Date.now() - 365 * 864e5).toISOString().slice(0, 10)).map(x => x[1]);
+      const doPico = e?.distancia_maxima_52s ?? (s.length > 1 && ok(p) ? p / Math.max(...s) - 1 : null);
+      return `<tr style="cursor:default"><td class="esq${nomeBdr[tk] ? ' empresa' : ''}"><b>${esc(tk)}</b>${nomeBdr[tk] ? `<span class="nome">${esc(nomeBdr[tk])} · BDR</span>` : ''}</td><td>${campoQtd(tk)}</td><td>R$ ${num(p, 2)}</td>
         <td class="${classeSinal(variacao(tk, 1))}">${pctSinal(variacao(tk, 1))}</td>
         <td class="${classeSinal(variacao(tk, 30))}">${pctSinal(variacao(tk, 30))}</td>
         <td class="${classeSinal(variacao(tk, 365))}">${pctSinal(variacao(tk, 365))}</td>
-        <td>${pct(e?.cdi_12m)}</td><td>${pct(e?.distancia_maxima_52s)}</td><td>${q ? dinheiro(q * p) : '–'}</td></tr>`;
+        <td>${pct(e?.cdi_12m)}</td><td>${pct(doPico)}</td><td>${q ? dinheiro(q * p) : '–'}</td></tr>`;
     }).join('')}</tbody></table></div>`;
 }
 
@@ -1122,7 +1131,7 @@ function tabelaPosicao(c, tks, ordenavel) {
   return `<div class="tabela-caixa" style="max-height:none;margin-top:12px"><table>
     <thead><tr>${COLUNAS_POSICAO.map(col => `<th ${ordenavel ? `data-ordem="${col.k}"` : ''} class="${col.esq ? 'esq' : ''}" ${col.dica ? `title="${esc(col.dica)}"` : ''}>${col.r}${ordenavel ? marcaCriterio(criterios, col.k) : ''}</th>`).join('')}</tr></thead>
     <tbody>${linhas.map(x => `<tr ${porTicker.has(x.tk) ? `data-ticker="${esc(x.tk)}"` : 'style="cursor:default"'}>
-      <td class="esq empresa"><b>${esc(x.tk)}</b><span class="nome">${esc(porTicker.get(x.tk)?.nome ?? etf[x.tk]?.nome ?? '')}</span></td>
+      <td class="esq empresa"><b>${esc(x.tk)}</b><span class="nome">${esc(porTicker.get(x.tk)?.nome ?? etf[x.tk]?.nome ?? (nomeBdr[x.tk] ? `${nomeBdr[x.tk]} · BDR` : ''))}</span></td>
       <td>${campoQtd(x.tk)}</td><td>${celPm(x)}</td><td>R$ ${num(x.p, 2)}</td>
       <td>${ok(x.investido) ? dinheiro(x.investido) : '–'}</td><td>${x.q && ok(x.p) ? dinheiro(x.q * x.p) : '–'}</td>
       <td>${sinal(x.variacao, v => pctSinal(v, 2))}</td><td>${ok(x.proventos) ? dinheiro(x.proventos) : '–'}</td>
@@ -1387,7 +1396,7 @@ function pesosClasses(c) {
   const reserva = local.reserva?.[c.id] ?? 0;
   const v = { tesouro: 0, global: 0, acoes: 0, cdb: 0 };
   for (const t of c.tesouro ?? []) v.tesouro += (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (infoTesouro(t).pu ?? 0);
-  for (const tk of c.etfs ?? []) v.global += (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0);
+  for (const tk of foraDe(c)) v.global += (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0);
   if (c.acoes) for (const l of linhasAcoes(c)) v.acoes += l.saldo;
   if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) v.cdb += calcularCdb(cdb).bruto;
   const valores = { tesouro: v.tesouro, global: v.global, acoes: v.acoes, municao: Math.max(0, v.cdb - reserva) };
@@ -1399,7 +1408,7 @@ function gatilhosFaixas(c) {
   const campo = `<label class="tile-sub" style="display:flex;gap:8px;align-items:center;margin:8px 0">Reserva de emergência (fica fora das faixas):
     <input class="campo" type="number" min="0" step="100" data-reserva="${esc(c.id)}" value="${esc(reserva || '')}" placeholder="ex.: 10000" style="width:120px"></label>`;
   if (!investido) return campo;
-  const nomes = { tesouro: 'Tesouro longo', global: 'Global (IVVB11 e WRLD11)', acoes: 'Ações Brasil', municao: 'Munição (CDB além da reserva)' };
+  const nomes = { tesouro: 'Tesouro longo', global: bdrsDe(c).length ? 'Global (ETFs e BDRs)' : 'Global (IVVB11 e WRLD11)', acoes: 'Ações Brasil', municao: 'Munição (CDB além da reserva)' };
   const notaMunicao = c.faixas.municao?.[0] === 0 ? '<p class="tile-sub" style="margin:6px 0 0">A munição pode ficar perto de zero depois de uma compra: os aportes mensais repõem o caixa para a próxima queda.</p>' : '';
   const linhas = Object.entries(nomes).map(([k, nome]) => {
     const [lo, hi] = c.faixas[k] ?? [];
@@ -1525,7 +1534,7 @@ const celulaAlvo = (alvo, p) => ok(alvo) ? `R$ ${num(alvo, 2)}<span class="nome"
 // Fatia de cada setor no saldo. Bancos e holdings financeiras (Itaúsa é quase só Itaú) contam juntos.
 // Seguradoras ficam no setor delas: em 2 anos de retornos diários a correlação banco–seguradora foi 0,35,
 // igual à de banco com telecom, e a das seguradoras entre si 0,47 (medido em 11/11/2026).
-// ETF, Tesouro e CDB aparecem como classes.
+// ETF, BDR, Tesouro e CDB aparecem como classes.
 const setorConcentracao = e => !e?.setor ? 'Outros'
   : e.financeira && !/seguradoras/i.test(e.setor) ? 'Bancos e holdings financeiras' : e.setor;
 function itensConcentracao(c) {
@@ -1540,7 +1549,7 @@ function itensConcentracao(c) {
   if (c.acoes) for (const l of linhasAcoes(c)) {
     somar(setorConcentracao(l.e), l.saldo, l.tk, true);
   }
-  for (const tk of c.etfs ?? []) somar(`ETF (${tk})`, (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0), tk, false);
+  for (const tk of foraDe(c)) somar(`${nomeBdr[tk] ? 'BDR' : 'ETF'} (${tk})`, (local.qtd[tk] ?? 0) * (precoAtual(tk) ?? 0), tk, false);
   for (const t of c.tesouro ?? []) {
     somar('Tesouro Direto', (local.qtd[`TD:${chaveTesouro(t)}`] ?? 0) * (infoTesouro(t).pu ?? 0), `${t.titulo} ${t.vencimento.slice(0, 4)}`, false);
   }

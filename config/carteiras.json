@@ -26,6 +26,12 @@
         "IVVB11",
         "WRLD11"
       ],
+      "bdrs": [
+        {
+          "ticker": "SPCX34",
+          "nome": "SpaceX"
+        }
+      ],
       "tesouro": [
         {
           "titulo": "Tesouro IPCA+",
