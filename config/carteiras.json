@@ -158,9 +158,9 @@
       },
       {
         "ticker": "CXSE3",
-        "data": "2026-11-12",
-        "quando": "",
-        "confirmado": false
+        "data": "2026-11-09",
+        "quando": "após o fechamento",
+        "confirmado": true
       },
       {
         "ticker": "ITUB4",
