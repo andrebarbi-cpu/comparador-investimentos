@@ -87,6 +87,12 @@ podem ser apagados quando quiser.
   - Preço: lucro/valor de mercado, EBIT/EV, P/VP e quanto está barato contra o próprio histórico.
   - Saúde: dívida líquida/EBITDA, liquidez corrente, dívida líquida/PL.
   - Crescimento: receita e lucro, crescimento anual em 5 anos.
+- **Classificação da empresa:** quatro níveis de saúde do negócio (Crítica, Atenção, Saudável, Destaque),
+  calculados na página (`classificar` em `site/app.js`) a partir do ROE contra o piso do setor, da
+  constância do lucro, da dívida e dos sinais de piora. Não olha preço.
+- **Faixas de preço:** na ficha de qualquer empresa, os preços em que o P/L chega ao quarto mais
+  barato, à mediana e ao quarto mais caro do histórico, com as ressalvas do que pode enganar; as
+  mesmas faixas viram linhas no gráfico de cotação.
 - **Oportunidade:** lucro positivo, qualidade ≥ 60, saúde ≥ 50 e P/L (ou EV/EBIT) mais barato
   que em pelo menos 75% dos meses desde 2020.
 - **Selos:** Graham (preço abaixo de √(22,5 × LPA × VPA)), Bazin (dividendo médio de 3 anos ≥ 6%

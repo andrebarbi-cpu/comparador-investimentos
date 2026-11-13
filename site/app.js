@@ -73,8 +73,120 @@ const selos = e => {
   if (e.selo_graham) s.push('Graham');
   if (e.selo_bazin) s.push('Bazin');
   if (e.selo_magica) s.push(`Fórmula Mágica #${e.magica_posicao}`);
-  return s.length ? `<span class="selos">${s.map(x => `<span class="selo">${x}</span>`).join('')}</span>` : '';
+  const classe = seloClasse(e);
+  return s.length || classe ? `<span class="selos">${classe}${s.map(x => `<span class="selo">${x}</span>`).join('')}</span>` : '';
 };
+
+// ---------- Classificação da empresa e faixas de preço ----------
+// Classificação: saúde do negócio em quatro níveis, só com o que o site já calcula (não olha preço).
+//   Crítica  — prejuízo em 12 meses, ROE abaixo da metade do piso do setor, lucro em menos de 60% dos
+//              anos ou dívida líquida de 5x o EBITDA ou mais (6,5x em energia e saneamento)
+//   Atenção  — ROE abaixo do piso, prejuízo em 2 anos ou mais, dívida de 3,5x a 5x (4,5x a 6,5x nas
+//              reguladas), lucro do último trimestre 30% menor ou ação caindo bem mais que o Ibovespa
+//   Destaque — nenhuma ressalva, nota de qualidade 80 ou mais, lucro em todos os anos e dividendo em
+//              pelo menos 4 dos últimos 5
+//   Saudável — nenhuma ressalva, sem chegar a destaque
+const NIVEIS = [
+  { k: 'critica', nome: 'Crítica', frase: 'Problema grave no negócio. Preço baixo aqui não é oportunidade.' },
+  { k: 'atencao', nome: 'Atenção', frase: 'Tem ponto para conferir antes de confiar nos números.' },
+  { k: 'saudavel', nome: 'Saudável', frase: 'Negócio em ordem, sem ressalva nos números.' },
+  { k: 'destaque', nome: 'Destaque', frase: 'Qualidade alta e constante, sem ressalva.' },
+];
+function classificar(e) {
+  if (e.classe !== undefined) return e.classe;
+  if (!e.elegivel) return (e.classe = null);
+  const pisos = D.config?.regras?.roe_minimo ?? {}, piso = pisos[e.setor] ?? pisos.padrao ?? 0.12;
+  const motivos = (e.conferir ?? '').split(' | ').filter(Boolean);
+  const graves = [], avisos = [], fortes = [];
+  if (!ok(e.lucro_12m) || e.lucro_12m <= 0) graves.push('prejuízo nos últimos 12 meses');
+  else if (ok(e.roe) && e.roe < piso / 2) graves.push(`ROE de ${pct(e.roe, 0)}, menos da metade do piso de ${pct(piso, 0)} do setor`);
+  else if (ok(e.roe) && e.roe < piso) avisos.push(`ROE de ${pct(e.roe, 0)}, abaixo do piso de ${pct(piso, 0)} do setor`);
+  else if (ok(e.roe)) fortes.push(`ROE de ${pct(e.roe, 0)}, acima do piso de ${pct(piso, 0)} do setor`);
+  const base = e.anos_lucro_base, comLucro = e.anos_lucro;
+  if (ok(base) && ok(comLucro) && base >= 3) {
+    if (comLucro / base < 0.6) graves.push(`lucro em só ${comLucro} de ${base} anos`);
+    else if (base - comLucro >= 2) avisos.push(`prejuízo em ${base - comLucro} de ${base} anos`);
+    else if (comLucro === base) fortes.push(`lucro em todos os ${base} anos`);
+  }
+  if (!e.financeira && ok(e.div_liq_ebitda)) {
+    // Receita regulada sustenta mais dívida: energia e saneamento têm limites mais altos
+    const [limAviso, limGrave] = /Energia Elétrica|Saneamento/.test(e.setor) ? [4.5, 6.5] : [3.5, 5];
+    if (e.div_liq_ebitda >= 99) graves.push('EBITDA negativo');
+    else if (e.div_liq_ebitda >= limGrave) graves.push(`dívida líquida de ${num(e.div_liq_ebitda)}x o EBITDA`);
+    else if (e.div_liq_ebitda >= limAviso) avisos.push(`dívida líquida de ${num(e.div_liq_ebitda)}x o EBITDA`);
+    else fortes.push(e.div_liq_ebitda <= 0 ? 'mais caixa do que dívida' : `dívida líquida de ${num(e.div_liq_ebitda)}x o EBITDA`);
+  }
+  if (motivos.includes('lucro do último trimestre caiu')) avisos.push(`lucro do último trimestre ${pctSinal(e.lucro_tri_var, 0)} contra um ano antes`);
+  if (motivos.includes('queda forte do preço')) avisos.push(`ação caiu ${pct(-e.queda_3m, 0)} em 3 meses (Ibovespa ${pctSinal(e.queda_3m_ibov, 0)})`);
+  if (ok(e.anos_dividendo) && e.anos_dividendo >= 4) fortes.push(`dividendo em ${e.anos_dividendo} dos últimos 5 anos`);
+  if (ok(e.nota_qualidade) && e.nota_qualidade >= 80) fortes.push(`nota de qualidade ${e.nota_qualidade} de 100`);
+  const destaque = e.nota_qualidade >= 80 && comLucro === base && e.anos_dividendo >= 4;
+  const nivel = graves.length ? 0 : avisos.length ? 1 : destaque ? 3 : 2;
+  return (e.classe = { nivel, ...NIVEIS[nivel], graves, avisos, fortes });
+}
+const seloClasse = e => {
+  const c = classificar(e);
+  if (!c) return '';
+  const porque = [...c.graves, ...c.avisos].join('; ') || c.frase;
+  return `<span class="selo selo-nivel nivel-${c.k}" title="${esc(`Classificação da empresa: ${c.nome}. ${porque}`)}">${c.nome}</span>`;
+};
+const maiuscula = t => t.charAt(0).toUpperCase() + t.slice(1);
+function blocoClasse(e) {
+  const c = classificar(e);
+  if (!c) return `<div class="bloco"><h3>Classificação da empresa</h3><p class="tile-sub" style="margin:0">Sem classificação: a empresa está fora do ranking (pouca negociação, balanço atrasado ou sem lucro informado).</p></div>`;
+  const item = (cls, marca, t) => `<li class="${cls}"><span aria-hidden="true">${marca}</span><span>${esc(maiuscula(t))}</span></li>`;
+  return `<div class="bloco bloco-classe"><h3>Classificação da empresa</h3>
+    <div class="classe-topo"><span class="selo selo-nivel nivel-${c.k} selo-grande">${c.nome}</span><span>${c.frase}</span></div>
+    <ul class="classe-lista">${[...c.graves.map(t => item('c-grave', '✕', t)), ...c.avisos.map(t => item('c-ressalva', '!', t)), ...c.fortes.map(t => item('c-forte', '✓', t))].join('')}</ul>
+    <div class="tile-sub">Mede a saúde do negócio, não o preço: uma empresa em destaque pode estar cara, e o contrário também.</div></div>`;
+}
+
+// Faixas de preço: em que preço o P/L chega ao quarto mais barato, à mediana e ao quarto mais caro
+// do próprio histórico (a régua mais exigente), com o lucro de 12 meses de hoje. Vale para qualquer
+// empresa; as ressalvas vêm das mesmas proteções do gatilho da carteira (gatilhoAcao).
+const ZONAS = [
+  { k: 'atraente', nome: 'Atraente', frase: 'no quarto mais barato do próprio histórico de P/L' },
+  { k: 'abaixo', nome: 'Abaixo do normal', frase: 'abaixo do preço normal, sem chegar à faixa atraente' },
+  { k: 'acima', nome: 'Acima do normal', frase: 'acima do preço normal, sem chegar à faixa cara' },
+  { k: 'cara', nome: 'Cara', frase: 'no quarto mais caro do próprio histórico de P/L' },
+];
+let faixasCotacao = null;
+function faixasPreco(tk, e, p) {
+  const g = gatilhoAcao(tk, e, p), r = e.regua;
+  const atraente = ok(g.normal) && ok(r.p25) && e.pl_uso > 0 ? p * r.p25 / e.pl_uso : null;
+  if (!ok(g.normal) || !ok(g.caro) || !ok(atraente)) {
+    return { g, motivo: !ok(e.pl) || e.pl <= 0 ? 'Sem lucro nos últimos 12 meses, não há como montar faixas de preço pelo P/L.'
+      : g.st.startsWith('P/L distorcido') ? 'O lucro de 12 meses despencou e o P/L ficou distorcido. As faixas só voltam a valer quando o lucro normalizar.'
+      : 'O histórico de P/L é curto demais para montar as faixas.' };
+  }
+  const zona = p <= atraente ? 0 : p < g.normal ? 1 : p < g.caro ? 2 : 3;
+  return { g, p, atraente, normal: g.normal, caro: g.caro, zona, ...ZONAS[zona] };
+}
+function blocoFaixas(fx, e) {
+  const titulo = '<h3>Faixas de preço pelo histórico</h3>';
+  if (!ok(fx.zona)) return `<div class="bloco">${titulo}<p class="tile-sub" style="margin:0">${fx.motivo}</p></div>`;
+  const { p, atraente, normal, caro } = fx;
+  const lo = Math.min(atraente, p) * 0.88, hi = Math.max(caro, p) * 1.1, pos = v => (100 * (v - lo) / (hi - lo)).toFixed(2);
+  const dist = v => (Math.abs(v / p - 1) < 0.005 ? 'no preço' : pctSinal(v / p - 1, 0));
+  const linhaF = (k, rot, v) => `<dt><i class="faixa-cor zona-${k}"></i>${rot}</dt><dd>R$ ${num(v, 2)}<span class="tile-sub"> · ${dist(v)}</span></dd>`;
+  const ressalvas = [...(classificar(e)?.nivel === 0 && fx.zona <= 1 ? ['empresa classificada como crítica: preço baixo aqui não é sinal de oportunidade'] : []), ...fx.g.tese];
+  return `<div class="bloco bloco-faixas">${titulo}
+    <div class="classe-topo"><span class="selo selo-zona zona-${fx.k} selo-grande">${fx.nome}</span><span>R$ ${num(p, 2)} hoje: ${fx.frase}.</span></div>
+    <div class="faixa-barra" role="img" aria-label="Preço de hoje contra as faixas atraente, normal e cara">
+      <i class="zona-atraente" style="width:${pos(atraente)}%"></i><i class="zona-abaixo" style="width:${pos(normal) - pos(atraente)}%"></i><i class="zona-acima" style="width:${pos(caro) - pos(normal)}%"></i><i class="zona-cara" style="width:${100 - pos(caro)}%"></i>
+      <b style="left:${pos(p)}%" title="Preço de hoje"></b></div>
+    <dl class="lista faixas-lista">${linhaF('atraente', 'Atraente até', atraente)}${linhaF('normal', 'Preço normal', normal)}${linhaF('cara', 'Cara a partir de', caro)}</dl>
+    ${ressalvas.length ? `<div class="faixa-ressalvas"><strong>O que pode enganar nesta conta</strong><ul>${ressalvas.map(t => `<li>${esc(maiuscula(t))}</li>`).join('')}</ul></div>` : ''}
+    <div class="tile-sub">Preços em que o P/L chega ao quarto mais barato, à mediana e ao quarto mais caro do histórico, com o lucro dos últimos 12 meses. Se o lucro cair, as faixas descem junto. Percentual: distância do preço de hoje.</div></div>`;
+}
+// As mesmas faixas como linhas no gráfico de cotação e no de P/L
+const refsCotacao = () => (!ok(faixasCotacao?.zona) ? [] : [
+  { y: faixasCotacao.atraente, rotulo: `atraente até R$ ${num(faixasCotacao.atraente, 2)}`, cor: 'var(--bom)' },
+  { y: faixasCotacao.normal, rotulo: `normal R$ ${num(faixasCotacao.normal, 2)}`, cor: 'var(--texto-3)' },
+  { y: faixasCotacao.caro, rotulo: `cara a partir de R$ ${num(faixasCotacao.caro, 2)}`, cor: 'var(--critico)' }]);
+const refsReguaPl = e => [
+  ok(e.regua?.p25) ? { y: e.regua.p25, rotulo: `barata abaixo de ${num(e.regua.p25)}`, tracejado: true } : null,
+  ok(e.regua?.p75) ? { y: e.regua.p75, rotulo: `cara acima de ${num(e.regua.p75)}`, tracejado: true, direita: true } : null];
 
 // ---------- Índices ----------
 const porTicker = new Map();
@@ -1866,6 +1978,8 @@ function montarAtivo(el, ticker) {
   };
   const sinal = v => `<span class="${classeSinal(v)}">${pctSinal(v)}</span>`;
   const g = naCarteira.has(e.cnpj) ? gatilhoAcao(ticker, e, p) : null;
+  const fx = faixasPreco(ticker, e, p);
+  faixasCotacao = fx;
   const tetoBazin = ok(e.bazin_margem) ? p * (1 + e.bazin_margem) : null;
   const justoGraham = ok(e.graham_margem) ? p * (1 + e.graham_margem) : null;
   const pares = D.empresas.filter(x => x.setor === e.setor && x.vm > 0).sort((a, b) => b.vm - a.vm);
@@ -1898,6 +2012,7 @@ function montarAtivo(el, ticker) {
       ${avisoNaoRecorrente(e)}
       ${!e.elegivel ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Fora do ranking:</strong> ${(e.liquidez ?? 0) < 1e6 ? 'negocia menos de R$ 1 mi por dia' : 'balanço atrasado ou sem lucro informado'}, por isso não recebe nota.</div></div>` : ''}
       ${alertasFicha(e) ? `<div class="aviso">${ICONE_ALERTA}<div><strong>Atenção</strong>${listaAlertas(alertasFicha(e))}</div></div>` : ''}
+      <div class="blocos blocos-analise">${blocoClasse(e)}${blocoFaixas(fx, e)}</div>
       <div class="blocos">
         <div class="bloco"><h3>Notas (0 a 100)</h3><div class="notas-ficha">
           ${[['Geral', e.nota_geral], ['Qualidade', e.nota_qualidade], ['Preço', e.nota_preco], ...(fin ? [] : [['Saúde', e.nota_saude]]), ['Crescimento', e.nota_crescimento]]
@@ -1908,7 +2023,6 @@ function montarAtivo(el, ticker) {
           ${linha('Mediana dos últimos 2 anos', num(e.pl_mediana_2a), 'O P/L típico nos últimos 24 meses, com juros no patamar de hoje (Tesouro IPCA+ perto de 7–8%). É a referência mais justa quando o juro está alto.')}
           ${linha('Faixa barata–cara', ok(e.regua.p25) ? `${num(e.regua.p25)} a ${num(e.regua.p75)}` : '–', 'Percentis 25 e 75 do P/L mês a mês (os menores entre desde 2020 e últimos 2 anos): abaixo do primeiro está barata; acima do segundo, cara.')}
           ${linha('Mais barato que em', ok(e.regua.pct) ? `${num(100 - e.regua.pct, 0)}% dos meses` : '–', 'Em quantos meses o P/L esteve mais alto que hoje, pela régua mais exigente (desde 2020 ou últimos 2 anos).')}
-          ${g && ok(g.normal) ? linha('Preço normal / caro', `R$ ${num(g.normal, 2)} / R$ ${num(g.caro, 2)}`, 'Preço em que o P/L volta à mediana e ao percentil 75 (a régua mais exigente), com o lucro de hoje.') : ''}
         </dl>${g ? `<div class="selos" style="margin-top:8px"><span class="selo">${g.st}</span></div>` : ''}</div>
         <div class="bloco"><h3>Preço justo pelos métodos clássicos</h3><dl class="lista">
           ${linha('Graham', ok(justoGraham) ? `R$ ${num(justoGraham, 2)} ${sinal(e.graham_margem)}` : '–')}
@@ -1931,8 +2045,8 @@ function montarAtivo(el, ticker) {
         <span class="segmentado" role="group" aria-label="Período">${[['1m', '1M'], ['6m', '6M'], ['1a', '1A'], ['5a', '5A'], ['max', 'Máx']].map(([k, r]) =>
           `<button data-periodo="${k}" aria-pressed="${k === '1a'}">${r}</button>`).join('')}</span></div>
         <div class="grafico" id="g-preco"></div>
-        <div class="tile-sub">Fechamento diário ajustado por desdobramentos, grupamentos e bonificações (não por dividendos).</div></div>
-      <div class="graficos" style="margin-top:12px"><div class="grafico-bloco"><h3>P/L mês a mês</h3><div class="tile-sub">Linha cinza: mediana desde 2020; tracejada: mediana dos últimos 2 anos (juro alto como hoje). Meses sem lucro ficam em branco.</div><div class="grafico" id="g-pl"></div></div>
+        <div class="tile-sub">Fechamento diário ajustado por desdobramentos, grupamentos e bonificações (não por dividendos). Linhas tracejadas: preços atraente, normal e caro com o lucro de hoje; no passado o lucro era outro, então a comparação fiel com o histórico é a do gráfico de P/L abaixo.</div></div>
+      <div class="graficos" style="margin-top:12px"><div class="grafico-bloco"><h3>P/L mês a mês</h3><div class="tile-sub">Linha cinza: mediana desde 2020; tracejada: mediana dos últimos 2 anos (juro alto como hoje). Pontilhadas de fora: abaixo da de baixo está barata; acima da de cima, cara. Meses sem lucro ficam em branco.</div><div class="grafico" id="g-pl"></div></div>
         <div class="grafico-bloco"><h3>P/VP mês a mês</h3><div class="tile-sub">Preço sobre patrimônio líquido</div><div class="grafico" id="g-pvp"></div></div></div>
     </section>
 
@@ -2057,7 +2171,7 @@ function montarAtivo(el, ticker) {
 
   graficoLinhas($('#g-pl'), { series: [{ nome: 'P/L', cor: 'var(--serie-1)', pontos: hist.map(x => [x[0], x[1]]) }], fmt: v => num(v), ref: [
     ok(e.pl_mediana) ? { y: e.pl_mediana, rotulo: `mediana desde 2020: ${num(e.pl_mediana)}` } : null,
-    ok(e.pl_mediana_2a) ? { y: e.pl_mediana_2a, rotulo: `últimos 2 anos: ${num(e.pl_mediana_2a)}`, tracejado: true, direita: true } : null] });
+    ok(e.pl_mediana_2a) ? { y: e.pl_mediana_2a, rotulo: `últimos 2 anos: ${num(e.pl_mediana_2a)}`, tracejado: true, direita: true } : null, ...refsReguaPl(e)] });
   graficoLinhas($('#g-pvp'), { series: [{ nome: 'P/VP', cor: 'var(--serie-1)', pontos: hist.map(x => [x[0], x[2]]) }], fmt: v => num(v, 2), ref: ok(e.pvp_mediana) ? { y: e.pvp_mediana, rotulo: `mediana ${num(e.pvp_mediana, 2)}` } : null });
   graficoLinhas($('#g-dy'), { series: [{ nome: 'Dividend yield', cor: 'var(--serie-3)', pontos: hist.map(x => [x[0], x[4]]) }], fmt: v => pct(v), fmtEixo: v => pct(v, 0), eixoZero: true });
   if (!fin) {
@@ -2105,7 +2219,7 @@ function desenharCotacao(dados, periodo) {
   const prov = dados.proventos.filter(x => x[0] > pts[0][0]).reduce((s, x) => s + x[4], 0);
   $('#a-preco-sub').innerHTML = `${data(pts[0][0])} a ${data(ult)}: <b class="${classeSinal(v)}">${pctSinal(v)}</b> no preço${prov > 0
     ? ` · <b class="${classeSinal(v + prov / pts[0][1])}">${pctSinal(v + prov / pts[0][1])}</b> somando R$ ${num(prov, 2)} de proventos por ação` : ''}`;
-  graficoDiario($('#g-preco'), { pontos: pts, fmt: x => `R$ ${num(x, 2)}`, cor: v >= 0 ? 'var(--serie-3)' : 'var(--negativo-col)' });
+  graficoDiario($('#g-preco'), { pontos: pts, fmt: x => `R$ ${num(x, 2)}`, cor: v >= 0 ? 'var(--serie-3)' : 'var(--negativo-col)', refs: refsCotacao() });
 }
 
 function desenharProventos(dados, e) {
@@ -2203,7 +2317,7 @@ function simular(dados) {
 }
 
 // Linha diária com área: eixo de datas, dica ao passar o mouse
-function graficoDiario(el, { pontos, fmt, cor = 'var(--serie-1)', altura = 260 }) {
+function graficoDiario(el, { pontos, fmt, cor = 'var(--serie-1)', altura = 260, refs = [] }) {
   el.innerHTML = '';
   if (pontos.length < 2) { el.innerHTML = '<p class="vazio">Sem histórico suficiente.</p>'; return; }
   const vals = pontos.map(p => p[1]);
@@ -2211,7 +2325,10 @@ function graficoDiario(el, { pontos, fmt, cor = 'var(--serie-1)', altura = 260 }
   const longo = Date.parse(pontos.at(-1)[0]) - Date.parse(pontos[0][0]) > 400 * 864e5;
   const rotX = d => longo ? mesAno(d.slice(0, 7)) : `${d.slice(8, 10)}/${d.slice(5, 7)}`;
   montarGrafico(el, w => {
-    const esc_ = escalaBonita(Math.min(...vals), Math.max(...vals));
+    // Linhas de referência (faixas de preço) só entram na escala quando estão perto do que o período mostra
+    const mn = Math.min(...vals), mx = Math.max(...vals);
+    const visiveis = refs.filter(r => ok(r.y) && r.y >= mn * 0.6 && r.y <= mx * 1.5);
+    const esc_ = escalaBonita(Math.min(mn, ...visiveis.map(r => r.y)), Math.max(mx, ...visiveis.map(r => r.y)));
     const passo = esc_.marcas[1] - esc_.marcas[0];
     const rotY = v => num(v, casas(passo));
     const m = { e: Math.max(...esc_.marcas.map(v => rotY(v).length)) * 6.5 + 10, d: 12, t: 8, b: 24 };
@@ -2227,6 +2344,8 @@ function graficoDiario(el, { pontos, fmt, cor = 'var(--serie-1)', altura = 260 }
       const i = Math.round(k * (pontos.length - 1) / (nRot - 1));
       svg += `<text x="${X(i)}" y="${altura - 6}" text-anchor="${k === 0 ? 'start' : k === nRot - 1 ? 'end' : 'middle'}">${rotX(pontos[i][0])}</text>`;
     }
+    for (const r of visiveis) svg += `<line x1="${m.e}" x2="${w - m.d}" y1="${Y(r.y)}" y2="${Y(r.y)}" stroke="${r.cor}" stroke-width="1.5" stroke-dasharray="5 4"/>
+      <text class="rotulo-ref" x="${m.e + 4}" y="${Y(r.y) - 5}">${esc(r.rotulo)}</text>`;
     svg += `<path d="${linhaD}L${X(pontos.length - 1)},${m.t + ph}L${X(0)},${m.t + ph}Z" fill="url(#${idGrad})"/>
       <path d="${linhaD}" fill="none" stroke="${cor}" stroke-width="2" stroke-linejoin="round"/>
       <line class="cruz" y1="${m.t}" y2="${m.t + ph}" stroke="var(--texto-3)" visibility="hidden"/><circle class="ponto" r="4" fill="${cor}" stroke="var(--superficie)" stroke-width="2" visibility="hidden"/>
@@ -3053,6 +3172,27 @@ function montarMetodo(el) {
         <li><b>Saúde:</b> dívida líquida/EBITDA, liquidez corrente e dívida líquida/patrimônio.</li>
         <li><b>Crescimento:</b> crescimento anual de receita e lucro em 5 anos.</li>
       </ul>
+      <h3>Classificação da empresa</h3>
+      <p>Cada empresa do ranking recebe um de quatro níveis. Eles medem a saúde do negócio, não o preço:</p>
+      <ul>
+        <li><b>Crítica:</b> prejuízo nos últimos 12 meses, ROE abaixo da metade do piso do setor, lucro em menos de 60% dos anos
+          ou dívida líquida de 5 vezes o EBITDA ou mais (6,5 vezes em energia e saneamento, que têm receita regulada).</li>
+        <li><b>Atenção:</b> ROE abaixo do piso, prejuízo em dois anos ou mais, dívida líquida de 3,5 vezes o EBITDA ou mais
+          (4,5 nas reguladas), lucro do último trimestre pelo menos 30% menor que um ano antes, ou ação que caiu mais de 25%
+          em 3 meses e bem mais que o Ibovespa.</li>
+        <li><b>Saudável:</b> nenhuma dessas ressalvas.</li>
+        <li><b>Destaque:</b> nenhuma ressalva, nota de qualidade 80 ou mais, lucro em todos os anos e dividendo em pelo menos
+          4 dos últimos 5.</li>
+      </ul>
+      <p>O piso de ROE é de ${pct(REGRAS.roe_minimo?.Bancos, 0)} para bancos e seguradoras e de ${pct(REGRAS.roe_minimo?.padrao, 0)} para as demais.
+        A página de cada empresa lista os motivos do nível. A classificação usa o lucro publicado: um prejuízo pontual pode
+        derrubar o nível de uma empresa boa até o número sair da conta de 12 meses.</p>
+      <h3>Faixas de preço</h3>
+      <p>Na página da empresa, três preços saem do histórico de P/L dela: <b>atraente</b> (o quarto mais barato),
+        <b>normal</b> (a mediana) e <b>cara</b> (o quarto mais caro), sempre pela régua mais exigente. A conta usa o lucro dos
+        últimos 12 meses: se o lucro cair, as faixas descem junto. Por isso o bloco lista o que pode enganar, como resultado
+        novo fora da base, ganho não recorrente ou lucro do trimestre em queda. As mesmas faixas aparecem como linhas no
+        gráfico de cotação.</p>
       <h3>Oportunidade</h3>
       <p>Empresa com lucro, qualidade ≥ 60, saúde ≥ 50 e P/L (ou EV/EBIT) mais barato do que em pelo menos 75% dos meses
         desde 2020 <b>e</b> também nos últimos 2 anos. A nota de oportunidade é metade qualidade e saúde, metade o tamanho do desconto.</p>
