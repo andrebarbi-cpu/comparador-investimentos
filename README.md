@@ -61,9 +61,15 @@ podem ser apagados quando quiser.
 - **Lucro não recorrente:** quando o lucro de 12 meses passa do resultado operacional, ou fica
   mais de 3 vezes acima da média dos 3 anos anteriores, a empresa recebe alerta e sai das
   oportunidades. Crescimento forte e legítimo também cai nessa regra; o alerta pede conferência.
-- **Preços do pregão:** às 12h30 e 16h (Brasília) entram preços do Yahoo Finanças com 15 min de
-  atraso, marcados como parciais (`cotacoes.parcial = 1`). Fonte não oficial, usada só para preço.
-  À noite o arquivo oficial da B3 substitui esses preços e as linhas parciais são apagadas.
+- **Preços do pregão:** a cada meia hora, das 10h07 às 17h37 (Brasília), o agendamento pede preços ao
+  Yahoo Finanças, com 15 min de atraso, marcados como parciais (`cotacoes.parcial = 1`). Fonte não
+  oficial, usada só para preço. À noite o arquivo oficial da B3 substitui esses preços e as linhas
+  parciais são apagadas. O GitHub não garante o agendamento no plano gratuito: na semana de 16/11/2026
+  só uma das oito execuções por dia chegou a rodar, e depois do fechamento. Durante o pregão, o preço
+  na página pode ser o do dia anterior; o pé do menu mostra a data dos preços e a hora em que foram gerados.
+- **Units (BTG, Energisa, Alupar):** o valor de mercado usa o preço da unit, não o das ações soltas,
+  que quase não negociam (`config/units.json`). Até 20/11/2026 o P/L do BTG saía de 8% a 60% acima
+  do real, conforme o mês; o histórico foi recalculado.
 - **ETFs fora do arquivo da B3:** o COTAHIST não traz ETFs de renda fixa. O AUPO11 vem do Yahoo
   Finanças (`src/externos.js`), só com pregões já fechados oficialmente.
 - **BDRs na carteira:** o lote padrão do COTAHIST deixou de trazer BDR em outubro de 2022. Os BDRs

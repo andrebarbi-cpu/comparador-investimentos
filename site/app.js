@@ -1842,6 +1842,7 @@ function blocoUltimoResultado(e) {
     lucroT = linhaVar('lucro', u[1], anterior?.[1], anterior ? rotuloTrimestre(anterior[0]) : '');
   const receitaA = linhaVar('receita', u[2], anoAntes?.[2], anoAntes ? rotuloTrimestre(anoAntes[0]) : '');
   const margem = ok(u[2]) && u[2] > 0 ? u[1] / u[2] : null, margemA = anoAntes && ok(anoAntes[2]) && anoAntes[2] > 0 ? anoAntes[1] / anoAntes[2] : null;
+  // Banco e seguradora: a "receita" muda de definição conforme a origem do balanço (BTG, 3T26: +655%); fica só o lucro
   const recente = u[3] && (Date.parse(hojeIso()) - Date.parse(u[3])) / 864e5 <= 10;
   return `<div class="grafico-bloco ultimo-resultado${recente ? ' recente' : ''}" style="margin-bottom:12px">
     <div class="mapa-topo"><div><h3>Resultado do ${rotuloTrimestre(u[0])}${recente ? ' <span class="selo">novo</span>' : ''}</h3>
@@ -1853,8 +1854,8 @@ function blocoUltimoResultado(e) {
       O P/L e o lucro de 12 meses ficam melhores do que o resultado recorrente.</p>` : ''}
     <div class="ativo-numeros ativo-numeros-p" style="margin:8px 0 0">
       <div><span>Lucro do trimestre</span><b>${dinheiro(u[1])}</b><small>${[lucroA, lucroT].filter(Boolean).join(' · ') || '–'}</small></div>
-      ${ok(u[2]) && u[2] > 0 ? `<div><span>Receita do trimestre</span><b>${dinheiro(u[2])}</b><small>${receitaA || '–'}</small></div>` : ''}
-      ${ok(margem) ? `<div><span>Margem líquida</span><b>${pct(margem)}</b><small>${ok(margemA) ? `era ${pct(margemA)} um ano antes` : '–'}</small></div>` : ''}
+      ${!e.financeira && ok(u[2]) && u[2] > 0 ? `<div><span>Receita do trimestre</span><b>${dinheiro(u[2])}</b><small>${receitaA || '–'}</small></div>` : ''}
+      ${!e.financeira && ok(margem) ? `<div><span>Margem líquida</span><b>${pct(margem)}</b><small>${ok(margemA) ? `era ${pct(margemA)} um ano antes` : '–'}</small></div>` : ''}
       <div><span>Lucro em 12 meses</span><b>${dinheiro(e.lucro_12m)}</b><small>ROE ${pct(e.roe)} · P/L ${num(e.pl)}</small></div>
     </div></div>`;
 }

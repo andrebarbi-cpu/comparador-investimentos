@@ -116,6 +116,10 @@ export function calcular(db) {
     if (!ex || r.dt_refer > ex.dt_refer) ultimaEntrega.set(r.cd_cvm, r);
   }
   const serieIbov = series.get('BOVA11');
+  // Pregões de choque (Ibovespa ±7% ou mais, ex.: 26/10/2026, -14%): queda de ~50% numa ação nesses dias é
+  // queda de verdade, não desdobramento. Ficam fora do alerta de evento societário.
+  const diasDeChoque = new Set();
+  for (let i = 1; i < serieIbov.d.length; i++) if (Math.abs(serieIbov.p[i] / serieIbov.p[i - 1] - 1) >= 0.07) diasDeChoque.add(serieIbov.d[i]);
   // Proventos por ação declarados na B3, por código e classe (ITSA|PN): base do dividend yield.
   // Restituição de capital (REST CAP DIN) devolve parte do capital, não é rendimento: fica de fora
   const proventosPorClasse = new Map();
@@ -128,6 +132,9 @@ export function calcular(db) {
   // Ganhos não recorrentes que os totais da CVM não separam (config/lucro-recorrente.json)
   const arqRecorrente = join(RAIZ, 'config', 'lucro-recorrente.json');
   const ajustesRecorrente = existsSync(arqRecorrente) ? JSON.parse(readFileSync(arqRecorrente, 'utf8')).empresas ?? {} : {};
+  // Units com os mesmos direitos em todas as classes: o preço de cada ação sai da unit (config/units.json)
+  const arqUnits = join(RAIZ, 'config', 'units.json');
+  const unitsParidade = existsSync(arqUnits) ? JSON.parse(readFileSync(arqUnits, 'utf8')).units ?? {} : {};
   // Manchete de resultado que fala em ganho não recorrente: sinal para conferir quando não há ajuste listado
   // (dividendo extraordinário e assembleia extraordinária não contam)
   const NAO_RECORRENTE = /n[aã]o[- ]recorrente|(ganho|lucro|efeito|resultado) extraordin[aá]ri|cr[eé]dito (fiscal|tribut|de pis)|pis.?cofins|venda de (participa|fatia|ativo|im[oó]ve|\d)|ganho (de capital|cont[aá]bil)/i;
@@ -176,13 +183,21 @@ export function calcular(db) {
     if (!regs.length) continue;
     calcularDozeMeses(regs, porRef);
 
+    // Unit com paridade entre as classes: cada ação vale o preço da unit ÷ ações por unit. As classes soltas
+    // quase não negociam e o preço delas não acompanha a unit (BTG: ON a 1,0–2,1 vezes a fração da unit).
+    const unitTk = tks.find(t => unitsParidade[t] > 0 && series.has(t));
+    const serieUnit = unitTk ? series.get(unitTk) : null, acoesPorUnit = unitTk ? unitsParidade[unitTk] : null;
     const precoClasses = data => {
+      const pUnit = serieUnit ? precoEm(serieUnit, data) : null;
+      if (pUnit != null) return { on: pUnit / acoesPorUnit, pn: pUnit / acoesPorUnit };
       const pOn = precoEm(on, data), pPn = precoEm(pn, data);
       return { on: pOn ?? pPn, pn: pPn ?? pOn };
     };
-    const linhaTempoAcoes = montarLinhaTempoAcoes(regs, precoClasses, on.v.length >= pn.v.length ? on : pn);
+    // Série usada para achar o dia de desdobramento/grupamento: a da unit, quando é ela que dá o preço
+    const serieRef = serieUnit ?? (on.v.length >= pn.v.length ? on : pn);
+    const linhaTempoAcoes = montarLinhaTempoAcoes(regs, precoClasses, serieRef);
     if (!linhaTempoAcoes.length) continue;
-    const ajusteFre = ajustarPeloFre(linhaTempoAcoes, regs, capitalFre.get(emp.cnpj), on.v.length >= pn.v.length ? on : pn);
+    const ajusteFre = ajustarPeloFre(linhaTempoAcoes, regs, capitalFre.get(emp.cnpj), serieRef);
     const eventosEmp = [...new Set(tks.map(t => t.slice(0, 4)))].flatMap(c => eventosPorCodigo.get(c) ?? []);
     const ajusteEventos = ajustarPorEventos(linhaTempoAcoes, regs, eventosEmp, ajusteFre ? capitalFre.get(emp.cnpj).dt_receb : null);
     const acoesEm = data => {
@@ -281,11 +296,10 @@ export function calcular(db) {
     const alertas = [];
     // Salto de preço numa proporção "redonda" depois do último balanço: provável desdobramento/grupamento
     // que a quantidade de ações ainda não reflete. Quedas reais (ex.: 26/10/2026, -14% no Ibovespa) não batem.
-    const serieRef = on.v.length >= pn.v.length ? on : pn;
     const ultimoBalanco = regs.filter(r => r.acoes_on != null).at(-1)?.dt_refer;
     // Se o Formulário de Referência já trouxe a nova quantidade de ações, não há o que alertar
     for (let i = indiceAte(serieRef.d, ultimoBalanco) + 1; !ajusteFre && !ajusteEventos && i > 0 && i < serieRef.d.length; i++) {
-      if (pareceEventoSocietario(serieRef.p[i] / serieRef.p[i - 1])) {
+      if (!diasDeChoque.has(serieRef.d[i]) && pareceEventoSocietario(serieRef.p[i] / serieRef.p[i - 1])) {
         alertas.push(`Preço variou ${Math.round(100 * (serieRef.p[i] / serieRef.p[i - 1] - 1))}% em ${serieRef.d[i]}: possível desdobramento/grupamento, múltiplos podem estar distorcidos até o próximo balanço`);
         break;
       }
@@ -293,7 +307,8 @@ export function calcular(db) {
     const desatualizado = dias(b.dt_refer, hoje) > BALANCO_MAX_DIAS;
     if (desatualizado) alertas.push(`Último balanço é de ${b.dt_refer}`);
     // Tendências recentes (comparando com o balanço de um ano antes)
-    if (umAnoAntes?.ttm.receita > 0 && t.receita > 0) {
+    // Só para não financeiras: em banco e seguradora a "receita" muda de definição conforme a origem do balanço
+    if (!financeira && umAnoAntes?.ttm.receita > 0 && t.receita > 0) {
       const margemAntes = umAnoAntes.ttm.lucro_contr / umAnoAntes.ttm.receita, margemHoje = t.lucro_contr / t.receita;
       if (margemAntes - margemHoje > 0.05) alertas.push(`Margem líquida caiu de ${br(100 * margemAntes, 1)}% para ${br(100 * margemHoje, 1)}% em 12 meses`);
     }

@@ -1,0 +1,17 @@
+{
+  "_leia": [
+    "Units em que todas as classes de ação têm o mesmo direito a dividendos e as ações quase não negociam",
+    "fora da unit. Para essas empresas o valor de mercado usa o preço da unit dividido pelo número de ações",
+    "que ela reúne, aplicado a todas as ações. Sem isso a conta usava o preço das classes soltas, que negociam",
+    "pouco e a preços desencontrados: o BTG (BPAC3 e BPAC5 giram ~R$ 1 mi por dia contra ~R$ 1 bi da unit)",
+    "aparecia com valor de mercado de 8% a 60% acima do real, conforme o mês, e o P/L subia junto.",
+    "Não entram units cujas classes têm direitos diferentes (Iguatemi: a PN recebe 3 vezes o dividendo da ON)",
+    "nem as que já batem com as classes soltas (Sanepar, Taesa, Klabin, Santander).",
+    "Valor: quantas ações formam uma unit."
+  ],
+  "units": {
+    "BPAC11": 3,
+    "ENGI11": 5,
+    "ALUP11": 3
+  }
+}
