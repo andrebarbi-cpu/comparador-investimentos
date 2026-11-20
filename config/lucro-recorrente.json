@@ -47,6 +47,21 @@
           ]
         }
       ]
+    },
+    "09.229.201/0001-30": {
+      "ticker": "GGPS3",
+      "ajustes": [
+        {
+          "trimestre": "2026-06-30",
+          "valor": 230000000,
+          "descricao": "reversão da provisão do Sistema S (Tema 1.079 do STJ)",
+          "estimativa": false,
+          "nota": "Lucro contábil dos controladores de R$ 376,7 mi no 2T26, contra R$ 120–160 mi num trimestre normal. A reversão somou R$ 230 mi depois de IR; sem ela, o lucro ajustado do trimestre foi de R$ 180 mi.",
+          "fontes": [
+            "https://visnoinvest.com.br/news/14766/grupo-gps-ggps3-registra-lucro-ajustado-de-r-410-mi-no-2t26"
+          ]
+        }
+      ]
     }
   }
 }
