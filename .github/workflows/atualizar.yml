@@ -139,10 +139,9 @@ jobs:
         continue-on-error: true
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/atualizar.yml/enable"
 
-      # Alguma fonte falhou: os dados que deram certo já foram salvos e publicados,
-      # mas a execução fica vermelha para o GitHub avisar por e-mail
+      # Alguma fonte falhou: os dados que deram certo já foram salvos e publicados. A execução segue verde,
+      # porque vermelha o GitHub manda um e-mail a cada vez (de 21 a 23/11/2026 o Tesouro ficou fora do ar
+      # e foram vários). O aviso fica na página da execução e a falha, na tabela execucoes do banco.
       - name: Avisar falha parcial
         if: steps.atualizar.outputs.falhou == '1'
-        run: |
-          echo "::error::Uma ou mais fontes falharam. Veja o passo Atualizar."
-          exit 1
+        run: echo "::warning::Uma ou mais fontes falharam. Veja o passo Atualizar."
