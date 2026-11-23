@@ -62,9 +62,19 @@ export function exportar(db) {
   const ultimo = serie => db.prepare('SELECT data, valor FROM macro WHERE serie = ? ORDER BY data DESC LIMIT 1').get(serie);
   const tesouro = db.prepare(`SELECT titulo, vencimento, taxa, pu FROM tesouro WHERE data = (SELECT max(data) FROM tesouro)
     ORDER BY titulo, vencimento`).all();
+  const tesouroData = db.prepare('SELECT max(data) d FROM tesouro').get().d;
+  // Quais títulos estão à venda (lista de compra do Tesouro Direto, gravada por src/macro.js). Lista com mais
+  // de 10 dias de diferença para as taxas não marca nada: melhor não dizer do que dizer errado.
+  let oferta = null;
+  try { oferta = JSON.parse(db.prepare("SELECT valor FROM meta WHERE chave = 'tesouro_oferta'").get()?.valor ?? 'null'); } catch { /* valor estragado: fica sem a marca */ }
+  if (oferta && !(Math.abs(Date.parse(tesouroData) - Date.parse(oferta.data)) <= 10 * 86400000)) oferta = null;
+  if (oferta) {
+    const aVenda = new Set(oferta.titulos);
+    for (const t of tesouro) t.a_venda = aVenda.has(`${t.titulo}|${t.vencimento}`);
+  }
   const macro = {
     selic: ultimo('selic_meta'), ipca_12m: ultimo('ipca_12m'), dolar: ultimo('dolar'),
-    cdi_dia: ultimo('cdi'), tesouro_data: db.prepare('SELECT max(data) d FROM tesouro').get().d,
+    cdi_dia: ultimo('cdi'), tesouro_data: tesouroData, tesouro_oferta_data: oferta?.data ?? null,
     // Focus mais recente: Selic esperada no fim de cada ano e IPCA de cada ano
     focus: (() => {
       const serie = ind => db.prepare(`SELECT data, ano, mediana FROM expectativas WHERE indicador = ?

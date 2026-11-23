@@ -2568,7 +2568,8 @@ function blocoSelicEsperada() {
       <thead><tr><th class="esq">Título</th><th>Tesouro</th><th>CDB 100%</th><th>Diferença</th>
         <th title="Selic média até o vencimento que faria o CDB empatar com o título. Acima dela, o CDB ganha.">Empata se Selic média for</th></tr></thead>
       <tbody>${linhas.map(t => `<tr style="cursor:default">
-        <td class="esq"><b>${t.pre ? 'Prefixado' : 'IPCA+'} ${t.vencimento.slice(0, 4)}</b> <span class="setor">${t.pre ? '' : 'IPCA + '}${num(t.taxa, 2)}% · ${num(t.dias / 365, 1)} anos</span></td>
+        <td class="esq"><b>${t.pre ? 'Prefixado' : 'IPCA+'} ${t.vencimento.slice(0, 4)}</b> <span class="setor">${t.pre ? '' : 'IPCA + '}${num(t.taxa, 2)}% · ${num(t.dias / 365, 1)} anos</span>${t.a_venda === false
+          ? ' <span class="etiqueta" title="O Tesouro não vende este título hoje: só quem já tem pode resgatar. A taxa é só referência.">Fora de oferta</span>' : ''}</td>
         <td>${pct(t.tesLiq, 2)}<span class="setor"> · ${pctSinal(t.real, 1)} real</span></td>
         <td>${pct(t.cdbLiq, 2)}<span class="setor"> · Selic média ${pct(t.selic, 2)}</span></td>
         <td class="${classeSinal(t.tesLiq - t.cdbLiq)}">${pp(t.tesLiq - t.cdbLiq)}</td>
@@ -2621,10 +2622,17 @@ function montarEtfs(el) {
       <div class="grafico" id="g-etf"></div>
     </div>
     <div class="duas-colunas">
-      <div class="grafico-bloco"><h3>Tesouro Direto hoje</h3><div class="tile-sub">Taxas de compra de ${data(D.macro.tesouro_data)}</div>
+      <div class="grafico-bloco"><h3>Tesouro Direto hoje</h3><div class="tile-sub">Taxas de compra de ${data(D.macro.tesouro_data)}${D.macro.tesouro_oferta_data
+          ? `. O Tesouro não vende todos: os marcados como fora de oferta só podem ser resgatados por quem já tem, e a taxa deles é só referência (lista de ${data(D.macro.tesouro_oferta_data)})` : ''}</div>
         <table><thead><tr><th class="esq">Título · vencimento: taxa (★ = na carteira)</th></tr></thead><tbody>
-        ${[...Map.groupBy(tes, t => t.titulo)].map(([titulo, ts]) => `<tr style="cursor:default"><td class="esq" style="white-space:normal">
-          <b>${esc(titulo)}</b><div class="setor">${ts.map(t => `${CARTEIRAS.some(c => (c.tesouro ?? []).some(x => x.titulo === t.titulo && x.vencimento === t.vencimento)) ? '★ ' : ''}${t.vencimento.slice(0, 4)}: ${indexador(titulo)}${num(t.taxa, 2)}%`).join(' · ')}</div></td></tr>`).join('')}
+        ${[...Map.groupBy(tes, t => t.titulo)].map(([titulo, ts]) => {
+          // a_venda vem da lista de compra do Tesouro Direto; sem a lista (campo ausente), todos aparecem juntos
+          const item = t => `${CARTEIRAS.some(c => (c.tesouro ?? []).some(x => x.titulo === t.titulo && x.vencimento === t.vencimento)) ? '★ ' : ''}${t.vencimento.slice(0, 4)}: ${indexador(titulo)}${num(t.taxa, 2)}%`;
+          const venda = ts.filter(t => t.a_venda !== false), fora = ts.filter(t => t.a_venda === false);
+          return `<tr style="cursor:default"><td class="esq" style="white-space:normal">
+          <b>${esc(titulo)}</b>${venda.length ? `<div class="setor">${venda.map(item).join(' · ')}</div>` : ''}${fora.length
+            ? `<div class="setor fora-oferta"><span class="etiqueta">Fora de oferta</span> ${fora.map(item).join(' · ')}</div>` : ''}</td></tr>`;
+        }).join('')}
         </tbody></table></div>
       <div class="grafico-bloco"><h3>Ações que mais pagam acima do Tesouro</h3>
         <div class="tile-sub">Lucro/preço (o inverso do P/L, um rendimento real aproximado) menos a taxa do Tesouro IPCA+ ~10 anos

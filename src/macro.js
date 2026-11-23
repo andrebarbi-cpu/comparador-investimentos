@@ -80,25 +80,49 @@ export async function atualizarFocus(db) {
   log(`Focus: ${dados.length} expectativas (última pesquisa ${dados[0]?.Data ?? '?'})`);
 }
 
+// Página do Tesouro Direto: só responde a navegador. "resgatar" traz todos os títulos; "investir", só os que estão à venda.
+async function paginaTesouro(lista) {
+  const resp = await fetch(`https://www.tesourodireto.com.br/o/rentabilidade/${lista}`, {
+    headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36', accept: 'application/json' },
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return Object.values(await resp.json()).flat();
+}
+// "Tesouro IPCA+ 2050" -> tipo "Tesouro IPCA+", como na tabela. O vencimento vem do campo próprio: no Educa+ e
+// no Renda+ o ano do nome é o do começo dos pagamentos, não o do vencimento.
+const tituloDaPagina = t => {
+  const m = /^(.*) (\d{4})$/.exec(t?.treasuryBondName ?? '');
+  return m && t.maturityDate ? { tipo: m[1], vencimento: t.maturityDate.slice(0, 10) } : null;
+};
+
+// Quais títulos estão à venda: a lista de compra da página do Tesouro Direto. O arquivo oficial traz taxa de
+// compra até para título que só pode ser resgatado (em 23/11/2026, o IPCA+ 2029, o 2035 e o 2045), e sem esta
+// lista a página do comparador mostra todos do mesmo jeito. Fica em meta, com a data do último preço.
+export async function atualizarOfertaTesouro(db) {
+  const lista = await paginaTesouro('investir');
+  const titulos = [...new Set(lista.map(tituloDaPagina).filter(Boolean).map(t => `${t.tipo}|${t.vencimento}`))].sort();
+  // Em dia normal são mais de 30. Lista vazia ou curta (negociação suspensa, página mudou) não troca a anterior.
+  if (titulos.length < 10) throw new Error(`a lista de compra veio com ${titulos.length} títulos`);
+  const data = lista.map(t => t.lastMarketPricingDate?.slice(0, 10)).filter(Boolean).sort().at(-1) ?? new Date().toISOString().slice(0, 10);
+  db.prepare("INSERT OR REPLACE INTO meta (chave, valor) VALUES ('tesouro_oferta', ?)").run(JSON.stringify({ data, titulos }));
+  return titulos.length;
+}
+
 // Reserva para quando o arquivo do Tesouro Transparente não baixa: a página do próprio Tesouro Direto.
 // De 21/11/2026 em diante o Tesouro Transparente passou a recusar conexões dos servidores do GitHub.
 // A página só traz o dia do último preço, sem histórico. O que entra por aqui nunca troca uma linha que já
 // existe, e é trocado pelas taxas oficiais da manhã quando o arquivo volta (INSERT OR REPLACE lá embaixo).
 export async function tesouroPeloSite(db) {
-  const resp = await fetch('https://www.tesourodireto.com.br/o/rentabilidade/resgatar', {
-    headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36', accept: 'application/json' },
-    signal: AbortSignal.timeout(60000),
-  });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  const corpo = await resp.json();
+  const lista = await paginaTesouro('resgatar');
   // "IPCA + 7,53%", "15,33%", "SELIC + 0,1085%" -> o número; "IPCA", "SELIC" e "prefixado" (sem oferta) -> nada
   const taxaDe = s => { const m = /(\d+(?:,\d+)?)\s*%/.exec(s ?? ''); return m ? Number(m[1].replace(',', '.')) : null; };
   // Só os tipos que o arquivo oficial já trouxe: o nome precisa bater com o da tabela
   const tipos = new Set(db.prepare('SELECT DISTINCT titulo FROM tesouro').all().map(r => r.titulo));
-  const titulos = Object.values(corpo).flat().map(t => {
-    const m = /^(.*) (\d{4})$/.exec(t?.treasuryBondName ?? '');
-    if (!m || !tipos.has(m[1]) || !t.maturityDate || !t.lastMarketPricingDate) return null;
-    return { tipo: m[1], vencimento: t.maturityDate.slice(0, 10), data: t.lastMarketPricingDate.slice(0, 10),
+  const titulos = lista.map(t => {
+    const m = tituloDaPagina(t);
+    if (!m || !tipos.has(m.tipo) || !t.lastMarketPricingDate) return null;
+    return { ...m, data: t.lastMarketPricingDate.slice(0, 10),
       compra: taxaDe(t.investmentProfitabilityIndexerName), resgate: taxaDe(t.redemptionProfitabilityFeeIndexerName),
       pu: t.unitaryRedemptionValue > 0 ? t.unitaryRedemptionValue : null };
   }).filter(Boolean);
@@ -121,7 +145,15 @@ export async function tesouroPeloSite(db) {
   return { n, data: titulos.map(t => t.data).sort().at(-1) };
 }
 
+// Taxas e, depois, a lista do que está à venda. A lista é um complemento: se ela falhar, as taxas já entraram
+// e a etapa não cai; vale a lista anterior, que a exportação deixa de usar quando fica velha.
 export async function atualizarTesouro(db, anoInicio) {
+  await atualizarTaxasTesouro(db, anoInicio);
+  try { log(`Tesouro: ${await atualizarOfertaTesouro(db)} títulos à venda`); }
+  catch (e) { log(`Tesouro: lista de títulos à venda não atualizada (${e.message}); vale a anterior`); }
+}
+
+async function atualizarTaxasTesouro(db, anoInicio) {
   const url = 'https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/PrecoTaxaTesouroDireto.csv';
   let arq;
   try {

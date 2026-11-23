@@ -25,7 +25,8 @@ IVVB11 e WRLD11, com histórico guardado e atualização diária automática.
 | Cadastro, setor, tickers, segmento de listagem | CVM – cadastro e FCA |
 | Cotações diárias (ações e ETFs) | B3 – arquivo COTAHIST |
 | CDI, Selic, IPCA, dólar | Banco Central – SGS |
-| Taxas do Tesouro Direto | Tesouro Transparente |
+| Taxas do Tesouro Direto | Tesouro Transparente; se o arquivo não baixa, a página do Tesouro Direto |
+| Quais títulos do Tesouro estão à venda | Página do Tesouro Direto (lista de compra) |
 
 ## Como rodar
 

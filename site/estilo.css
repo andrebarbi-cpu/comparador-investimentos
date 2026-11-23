@@ -210,6 +210,7 @@ a.bloco-link:hover { border-color: var(--destaque); }
   flex: none; font-size: .68rem; font-weight: 600; padding: 2px 7px; border-radius: 5px; white-space: nowrap; letter-spacing: .01em;
   background: var(--superficie-2); color: var(--texto-2); border: 1px solid var(--linha);
 }
+.fora-oferta { margin-top: 5px; line-height: 1.7; }
 .etiqueta-venda { background: color-mix(in srgb, var(--serie-2) 14%, transparent); color: var(--serie-2); border-color: transparent; }
 .etiqueta-compra { background: color-mix(in srgb, var(--bom) 14%, transparent); color: var(--texto-bom); border-color: transparent; }
 .etiqueta-conferir { background: color-mix(in srgb, var(--atencao) 18%, transparent); color: var(--texto); border-color: transparent; }
