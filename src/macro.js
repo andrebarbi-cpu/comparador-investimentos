@@ -80,9 +80,60 @@ export async function atualizarFocus(db) {
   log(`Focus: ${dados.length} expectativas (última pesquisa ${dados[0]?.Data ?? '?'})`);
 }
 
+// Reserva para quando o arquivo do Tesouro Transparente não baixa: a página do próprio Tesouro Direto.
+// De 21/11/2026 em diante o Tesouro Transparente passou a recusar conexões dos servidores do GitHub.
+// A página só traz o dia do último preço, sem histórico. O que entra por aqui nunca troca uma linha que já
+// existe, e é trocado pelas taxas oficiais da manhã quando o arquivo volta (INSERT OR REPLACE lá embaixo).
+export async function tesouroPeloSite(db) {
+  const resp = await fetch('https://www.tesourodireto.com.br/o/rentabilidade/resgatar', {
+    headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36', accept: 'application/json' },
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const corpo = await resp.json();
+  // "IPCA + 7,53%", "15,33%", "SELIC + 0,1085%" -> o número; "IPCA", "SELIC" e "prefixado" (sem oferta) -> nada
+  const taxaDe = s => { const m = /(\d+(?:,\d+)?)\s*%/.exec(s ?? ''); return m ? Number(m[1].replace(',', '.')) : null; };
+  // Só os tipos que o arquivo oficial já trouxe: o nome precisa bater com o da tabela
+  const tipos = new Set(db.prepare('SELECT DISTINCT titulo FROM tesouro').all().map(r => r.titulo));
+  const titulos = Object.values(corpo).flat().map(t => {
+    const m = /^(.*) (\d{4})$/.exec(t?.treasuryBondName ?? '');
+    if (!m || !tipos.has(m[1]) || !t.maturityDate || !t.lastMarketPricingDate) return null;
+    return { tipo: m[1], vencimento: t.maturityDate.slice(0, 10), data: t.lastMarketPricingDate.slice(0, 10),
+      compra: taxaDe(t.investmentProfitabilityIndexerName), resgate: taxaDe(t.redemptionProfitabilityFeeIndexerName),
+      pu: t.unitaryRedemptionValue > 0 ? t.unitaryRedemptionValue : null };
+  }).filter(Boolean);
+  if (!titulos.length) throw new Error('a página do Tesouro Direto veio sem títulos');
+  // Título fora de oferta só tem a taxa de resgate. A de compra, que é a que a tabela guarda, sai dela menos
+  // a diferença que os títulos do mesmo tipo em oferta mostram no dia (0,12 ponto nos IPCA+ e prefixados)
+  const diferenca = tipo => {
+    const d = titulos.filter(t => t.tipo === tipo && t.compra != null && t.resgate != null).map(t => t.resgate - t.compra).sort((a, b) => a - b);
+    return d.length ? d[d.length >> 1] : 0;
+  };
+  const ins = db.prepare('INSERT OR IGNORE INTO tesouro (titulo, vencimento, data, taxa, pu) VALUES (?, ?, ?, ?, ?)');
+  let n = 0;
+  transacao(db, () => {
+    for (const t of titulos) {
+      const taxa = t.compra ?? (t.resgate != null ? Math.round((t.resgate - diferenca(t.tipo)) * 10000) / 10000 : null);
+      if (taxa == null && t.pu == null) continue;
+      n += Number(ins.run(t.tipo, t.vencimento, t.data, taxa, t.pu).changes);
+    }
+  });
+  return { n, data: titulos.map(t => t.data).sort().at(-1) };
+}
+
 export async function atualizarTesouro(db, anoInicio) {
   const url = 'https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3/resource/796d2059-14e9-44e3-80c9-2d9e30b405c1/download/PrecoTaxaTesouroDireto.csv';
-  const arq = await baixar(url, 'tesouro/PrecoTaxaTesouroDireto.csv', { forcar: true });
+  let arq;
+  try {
+    arq = await baixar(url, 'tesouro/PrecoTaxaTesouroDireto.csv', { forcar: true });
+  } catch (e) {
+    // Arquivo oficial fora do ar: vale a página do Tesouro Direto. Se ela também falhar, a etapa falha.
+    let reserva;
+    try { reserva = await tesouroPeloSite(db); }
+    catch (e2) { throw new Error(`${e.message}; a reserva (página do Tesouro Direto) também falhou: ${e2.message}`); }
+    log(`Tesouro: arquivo oficial fora do ar (${e.message.split(': ').at(-1)}); pela página do Tesouro Direto, ${reserva.n} taxas novas, preços de ${br(reserva.data)}`);
+    return;
+  }
   const texto = readFileSync(arq).toString('latin1');
   const ins = db.prepare('INSERT OR REPLACE INTO tesouro (titulo, vencimento, data, taxa, pu) VALUES (?, ?, ?, ?, ?)');
   // O arquivo usa vírgula decimal e não tem separador de milhar (ex.: 20185,39)

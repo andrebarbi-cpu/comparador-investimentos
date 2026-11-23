@@ -64,9 +64,12 @@ jobs:
           for url in \
             "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A$(date +%Y).ZIP" \
             https://dados.cvm.gov.br/dados/CIA_ABERTA/CAD/DADOS/cad_cia_aberta.csv \
-            "https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/1?formato=json"; do
+            "https://api.bcb.gov.br/dados/serie/bcdata.sgs.432/dados/ultimos/1?formato=json" \
+            https://www.tesourotransparente.gov.br/ckan/dataset/df56aa42-484a-4a59-8184-7676580c81e3; do
             echo "$(curl -s -o /dev/null -I -m 30 -w '%{http_code}' "$url") $url"
           done
+          # Reserva do Tesouro (src/macro.js): a página do Tesouro Direto só responde a navegador
+          echo "$(curl -s -o /dev/null -m 30 -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36' -w '%{http_code}' https://www.tesourodireto.com.br/o/rentabilidade/resgatar) https://www.tesourodireto.com.br/o/rentabilidade/resgatar"
 
       # Release inexistente (primeira vez) leva à carga inicial; qualquer outra falha para a execução,
       # para um banco vazio nunca ser guardado por cima do bom
