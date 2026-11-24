@@ -102,9 +102,15 @@ const tituloDaPagina = t => {
 export async function atualizarOfertaTesouro(db) {
   const lista = await paginaTesouro('investir');
   const titulos = [...new Set(lista.map(tituloDaPagina).filter(Boolean).map(t => `${t.tipo}|${t.vencimento}`))].sort();
-  // Em dia normal são mais de 30. Lista vazia ou curta (negociação suspensa, página mudou) não troca a anterior.
-  if (titulos.length < 10) throw new Error(`a lista de compra veio com ${titulos.length} títulos`);
   const data = lista.map(t => t.lastMarketPricingDate?.slice(0, 10)).filter(Boolean).sort().at(-1) ?? new Date().toISOString().slice(0, 10);
+  // Em dia normal são mais de 30. Com a negociação suspensa (em 24/11/2026 sobraram só os Tesouro Selic) a lista
+  // encolhe: lista curta, ou bem menor que uma anterior ainda recente, não troca a que está guardada. Passados
+  // 5 dias a comparação deixa de valer, para uma mudança de verdade na oferta não ficar travada para sempre.
+  let anterior = null;
+  try { anterior = JSON.parse(db.prepare("SELECT valor FROM meta WHERE chave = 'tesouro_oferta'").get()?.valor ?? 'null'); } catch { /* valor estragado: vale só o mínimo */ }
+  const recente = anterior && Date.parse(data) - Date.parse(anterior.data) <= 5 * 86400000;
+  const minimo = Math.max(10, recente ? Math.ceil(0.8 * anterior.titulos.length) : 0);
+  if (titulos.length < minimo) throw new Error(`a lista de compra veio com ${titulos.length} títulos; negociação suspensa?`);
   db.prepare("INSERT OR REPLACE INTO meta (chave, valor) VALUES ('tesouro_oferta', ?)").run(JSON.stringify({ data, titulos }));
   return titulos.length;
 }
@@ -127,6 +133,13 @@ export async function tesouroPeloSite(db) {
       pu: t.unitaryRedemptionValue > 0 ? t.unitaryRedemptionValue : null };
   }).filter(Boolean);
   if (!titulos.length) throw new Error('a página do Tesouro Direto veio sem títulos');
+  // Negociação suspensa: a página some com os títulos parados (em 24/11/2026, às 9h45, ficaram só os Tesouro
+  // Selic). Gravar esse dia pela metade deixaria a página do comparador só com eles e sem a taxa do IPCA+ que
+  // serve de régua para as ações. Faltando mais de 10% dos títulos de um dia normal, nada é gravado: o site
+  // segue com o último dia completo e a leitura seguinte, com a negociação reaberta, traz o dia inteiro.
+  const normal = db.prepare('SELECT max(n) n FROM (SELECT count(*) n FROM tesouro GROUP BY data ORDER BY data DESC LIMIT 10)').get().n ?? 0;
+  const data = titulos.map(t => t.data).sort().at(-1);
+  if (titulos.length < Math.ceil(0.9 * normal)) return { n: 0, data, suspensa: true, achados: titulos.length, normal };
   // Título fora de oferta só tem a taxa de resgate. A de compra, que é a que a tabela guarda, sai dela menos
   // a diferença que os títulos do mesmo tipo em oferta mostram no dia (0,12 ponto nos IPCA+ e prefixados)
   const diferenca = tipo => {
@@ -142,7 +155,7 @@ export async function tesouroPeloSite(db) {
       n += Number(ins.run(t.tipo, t.vencimento, t.data, taxa, t.pu).changes);
     }
   });
-  return { n, data: titulos.map(t => t.data).sort().at(-1) };
+  return { n, data };
 }
 
 // Taxas e, depois, a lista do que está à venda. A lista é um complemento: se ela falhar, as taxas já entraram
@@ -163,7 +176,9 @@ async function atualizarTaxasTesouro(db, anoInicio) {
     let reserva;
     try { reserva = await tesouroPeloSite(db); }
     catch (e2) { throw new Error(`${e.message}; a reserva (página do Tesouro Direto) também falhou: ${e2.message}`); }
-    log(`Tesouro: arquivo oficial fora do ar (${e.message.split(': ').at(-1)}); pela página do Tesouro Direto, ${reserva.n} taxas novas, preços de ${br(reserva.data)}`);
+    const motivo = e.message.split(': ').at(-1);
+    if (reserva.suspensa) log(`Tesouro: arquivo oficial fora do ar (${motivo}); a página do Tesouro Direto está com ${reserva.achados} de ${reserva.normal} títulos (negociação suspensa?), nada gravado`);
+    else log(`Tesouro: arquivo oficial fora do ar (${motivo}); pela página do Tesouro Direto, ${reserva.n} taxas novas, preços de ${br(reserva.data)}`);
     return;
   }
   const texto = readFileSync(arq).toString('latin1');
