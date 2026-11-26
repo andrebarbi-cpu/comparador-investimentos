@@ -836,7 +836,8 @@ function limparDados(d) {
       d: /^\d{4}-\d{2}-\d{2}$/.test(o.d ?? '') ? o.d : '', t: ['c', 'v', 's', 'b'].includes(o.t) ? o.t : 'c',
       q: numeroValido(o.q), p: numeroValido(o.p) }))])
     .filter(([, v]) => v.length));
-  return { qtd: numeros(d?.qtd), cdbs, reserva: numeros(d?.reserva), pm: numeros(d?.pm), compras };
+  // aplicado: quanto foi pago pelos títulos do Tesouro (total em reais, por título)
+  return { qtd: numeros(d?.qtd), cdbs, reserva: numeros(d?.reserva), pm: numeros(d?.pm), compras, aplicado: numeros(d?.aplicado) };
 }
 function lerLocal() {
   try {
@@ -845,11 +846,11 @@ function lerLocal() {
       // Antes eram duas carteiras ("dividendos" e "global"); a reserva era da global
       const reserva = s.reserva ?? {};
       if (reserva.global && !reserva.principal) reserva.principal = reserva.global;
-      return { ...limparDados({ qtd: s.qtd, cdbs: s.cdbs, reserva, pm: s.pm, compras: s.compras }), soTenho: !!s.soTenho,
+      return { ...limparDados({ qtd: s.qtd, cdbs: s.cdbs, reserva, pm: s.pm, compras: s.compras, aplicado: s.aplicado }), soTenho: !!s.soTenho,
         visao: s.visao === 'posicao' ? 'posicao' : 'analise' };
     }
   } catch { /* sem acesso ao armazenamento: segue sem quantidades */ }
-  return { qtd: {}, cdbs: [], reserva: {}, pm: {}, compras: {}, visao: 'analise' };
+  return { qtd: {}, cdbs: [], reserva: {}, pm: {}, compras: {}, aplicado: {}, visao: 'analise' };
 }
 let local = lerLocal();
 let localSalvo = true;
@@ -867,10 +868,10 @@ function importar(codigo) {
     const d = limparDados(deBase64(codigo));
     // O link traz a carteira inteira de quem gerou: substitui a deste aparelho, depois de confirmar
     const temAlgo = Object.keys(local.qtd).length || local.cdbs.length;
-    if (temAlgo && !confirm('Este link substitui as quantidades, os preços médios, as operações, os CDBs e a reserva salvos neste aparelho pelos do link. Continuar?')) {
+    if (temAlgo && !confirm('Este link substitui as quantidades, os preços médios, as operações, o aplicado no Tesouro, os CDBs e a reserva salvos neste aparelho pelos do link. Continuar?')) {
       avisoImportacao = 'Importação cancelada: nada foi alterado.';
     } else {
-      local = { ...local, qtd: d.qtd, cdbs: d.cdbs, reserva: d.reserva, pm: d.pm, compras: d.compras };
+      local = { ...local, qtd: d.qtd, cdbs: d.cdbs, reserva: d.reserva, pm: d.pm, compras: d.compras, aplicado: d.aplicado };
       salvarLocal();
       avisoImportacao = localSalvo ? 'Quantidades importadas e salvas neste aparelho.'
       : 'Quantidades importadas, mas este navegador não deixa salvar: elas somem ao fechar a página.';
@@ -924,7 +925,7 @@ function montarCarteiras(el) {
     <div id="cart-corpo"></div>
     <div class="grafico-bloco" style="margin-top:20px">
       <h3>Levar as quantidades para outro aparelho</h3>
-      <p class="tile-sub">O link carrega as quantidades, os preços médios, as operações e os CDBs deste aparelho. Quem abrir grava esses números no próprio
+      <p class="tile-sub">O link carrega as quantidades, os preços médios, as operações, o aplicado no Tesouro e os CDBs deste aparelho. Quem abrir grava esses números no próprio
         navegador. Mande só para quem você quiser.</p>
       <div class="filtros"><button class="botao" id="cart-link">Gerar link com minhas quantidades</button>
         <input class="campo" id="cart-link-txt" readonly style="flex:1;min-width:200px" aria-label="Link gerado" hidden></div>
@@ -932,7 +933,7 @@ function montarCarteiras(el) {
   avisoImportacao = '';
   desenharCarteiras();
   $('#cart-link').addEventListener('click', async () => {
-    const url = `${location.origin}${location.pathname}#importar/${paraBase64({ qtd: local.qtd, cdbs: local.cdbs, reserva: local.reserva, pm: local.pm, compras: local.compras })}`;
+    const url = `${location.origin}${location.pathname}#importar/${paraBase64({ qtd: local.qtd, cdbs: local.cdbs, reserva: local.reserva, pm: local.pm, compras: local.compras, aplicado: local.aplicado })}`;
     const txt = $('#cart-link-txt');
     txt.hidden = false;
     txt.value = url;
@@ -967,6 +968,12 @@ function desenharCarteiras() {
   for (const i of corpo.querySelectorAll('input.qtd')) i.addEventListener('change', () => {
     const v = Number(i.value);
     if (v > 0) local.qtd[i.dataset.chave] = v; else delete local.qtd[i.dataset.chave];
+    salvarLocal();
+    desenharCarteiras();
+  });
+  for (const i of corpo.querySelectorAll('input.aplicado')) i.addEventListener('change', () => {
+    const v = Number(i.value);
+    if (v > 0) local.aplicado[i.dataset.chave] = v; else delete local.aplicado[i.dataset.chave];
     salvarLocal();
     desenharCarteiras();
   });
@@ -1094,14 +1101,21 @@ function blocoTesouro(c) {
   return c.tesouro.map(t => {
     const i = infoTesouro(t), ch = `TD:${chaveTesouro(t)}`, q = local.qtd[ch] ?? 0;
     if (!i.ult) return `<p class="vazio">Sem dados para ${esc(t.titulo)} ${esc(t.vencimento)}.</p>`;
+    // Aplicado: o total pago pelos títulos, que cada um informa (a corretora mostra como "valor aplicado")
+    const apl = local.aplicado[ch] > 0 ? local.aplicado[ch] : null;
+    const ganho = q && apl ? q * i.pu - apl : null;
     return `<div class="tabela-caixa" style="max-height:none;margin-top:12px"><table>
       <thead><tr><th class="esq">Título</th><th>Qtd. (títulos)</th><th>Taxa hoje</th><th>Preço do título</th>
-        <th>1 mês</th><th>12 meses</th><th>Saldo</th></tr></thead>
+        <th>1 mês</th><th>12 meses</th><th title="Quanto você pagou pelos títulos, somando todas as compras">Aplicado</th>
+        <th>Saldo</th><th title="Saldo de hoje contra o valor aplicado">Variação</th></tr></thead>
       <tbody><tr style="cursor:default">
         <td class="esq"><b>${esc(t.titulo)} ${t.vencimento.slice(0, 4)}</b><span class="nome" style="display:block">vence em ${data(t.vencimento)}</span></td>
         <td>${campoQtd(ch, 0.01)}</td><td>IPCA + ${num(i.taxa, 2)}%</td><td>R$ ${num(i.pu, 2)}</td>
         <td class="${classeSinal(i.pu1m)}">${pctSinal(i.pu1m)}</td><td class="${classeSinal(i.pu12m)}">${pctSinal(i.pu12m)}</td>
-        <td>${q ? dinheiro(q * i.pu) : '–'}</td></tr></tbody></table></div>
+        <td><input class="campo aplicado" type="number" min="0" step="any" inputmode="decimal" data-chave="${esc(ch)}"
+          value="${esc(apl ?? '')}" placeholder="R$" style="width:110px" aria-label="Valor aplicado em ${esc(t.titulo)} ${t.vencimento.slice(0, 4)}"></td>
+        <td>${q ? dinheiro(q * i.pu) : '–'}</td>
+        <td>${ganho != null ? `<span class="${classeSinal(ganho)}">${pctSinal(ganho / apl, 2)}</span><span class="nome" style="display:block">${ganho >= 0 ? '+' : '−'}${dinheiro(Math.abs(ganho))}</span>` : '–'}</td></tr></tbody></table></div>
       <div class="grafico-bloco" style="margin-top:12px"><h3>Taxa do ${esc(t.titulo)} ${t.vencimento.slice(0, 4)}</h3>
         <div class="tile-sub">${ok(i.pctTaxa) ? `Hoje a taxa está acima de ${num(i.pctTaxa, 0)}% dos dias desde ${data(i.s[0][0])}. ` : ''}
           Taxa alta = título barato: bom momento para comprar mais. Para quem já tem, o saldo cai quando a taxa sobe
@@ -1310,7 +1324,7 @@ function desenharJanelaPm() {
         <b class="pm-valor">${x.carregando ? '…' : r ? `R$ ${num(r.pm, 2)}` : '–'}</b></label>
       <label class="pm-opcao ${x.manual ? 'ativa' : ''}"><input type="radio" name="pm-modo" value="manual" ${x.manual ? 'checked' : ''}>
         <span><b>Informar o preço médio</b><small>Vale no lugar do calculado. Os proventos só aparecem com as operações registradas.</small></span>
-        <span class="pm-valor">R$ <input class="campo" type="number" min="0" step="0.01" id="pm-manual" value="${esc(local.pm[tk] ?? '')}" style="width:100px" aria-label="Preço médio informado"></span></label>
+        <span class="pm-valor">R$ <input class="campo" type="number" min="0" step="any" id="pm-manual" value="${esc(local.pm[tk] ?? '')}" style="width:100px" aria-label="Preço médio informado"></span></label>
     </div>
     ${x.difQtd != null ? `<div class="aviso" style="margin-top:12px">${ICONE_ALERTA}<div>As operações somam <b>${cotasFmt(x.difQtd)}</b> cotas hoje, e a carteira
       tem ${cotasFmt(x.q)}. <button class="botao" id="pm-usar-qtd">Usar ${cotasFmt(x.difQtd)} cotas na carteira</button></div></div>` : ''}
@@ -1401,12 +1415,35 @@ function ligarCdbs() {
   });
 }
 
+// Quanto foi pago pelo que tem preço médio ou valor aplicado informado, e quanto isso vale hoje.
+// "faltam" conta as posições sem esse número: ficam fora das duas somas, para a variação comparar a mesma coisa.
+function investidoCarteira(c) {
+  let investido = 0, saldo = 0, faltam = 0;
+  for (const tk of [...(c.acoes ?? []), ...foraDe(c)]) {
+    const x = posicao(tk);
+    if (!(x.q > 0) || !ok(x.p)) continue;
+    if (ok(x.investido)) { investido += x.investido; saldo += x.saldo; } else faltam++;
+  }
+  for (const t of c.tesouro ?? []) {
+    const ch = `TD:${chaveTesouro(t)}`, q = local.qtd[ch] ?? 0, pu = infoTesouro(t).pu;
+    if (!(q > 0) || !ok(pu)) continue;
+    if (local.aplicado[ch] > 0) { investido += local.aplicado[ch]; saldo += q * pu; } else faltam++;
+  }
+  if (c.cdb) for (const cdb of local.cdbs) if (cdb.valor && cdb.data) { investido += Number(cdb.valor); saldo += calcularCdb(cdb).bruto; }
+  return { investido, saldo, faltam };
+}
 function resumoCarteira(c) {
   const el = document.getElementById(`resumo-${c.id}`);
   const { saldo, renda, dia, bolsa } = totaisCarteira(c);
   if (!saldo) { el.innerHTML = '<p class="tile-sub" style="margin:0">Preencha as quantidades para ver o saldo e a renda estimada.</p>'; return; }
+  // Total investido: só na visão de posição, que é onde os preços médios são carregados
+  const inv = local.visao === 'posicao' ? investidoCarteira(c) : null;
+  const ganho = inv?.investido ? inv.saldo - inv.investido : null;
+  const linhaInvestido = ganho == null ? '' : `<div class="tile-sub">Investido <b>${dinheiro(inv.investido)}</b> ·
+      <span class="${classeSinal(ganho)}">${ganho >= 0 ? '+' : '−'}${dinheiro(Math.abs(ganho))} (${pctSinal(ganho / inv.investido, 2)})</span>${inv.faltam
+        ? ` · fora ${inv.faltam} ${inv.faltam === 1 ? 'posição' : 'posições'} sem preço médio ou valor aplicado` : ''}</div>`;
   el.innerHTML = `<div class="resumo-coluna"><div class="bloco"><h3>Saldo estimado</h3><div class="tile-valor">${dinheiro(saldo)}</div>
-      <div class="tile-sub">Pelos preços de ${rotuloPrecos()}</div></div>
+      <div class="tile-sub">Pelos preços de ${rotuloPrecos()}</div>${linhaInvestido}</div>
     ${bolsa ? `<div class="bloco"><h3>Hoje</h3><div class="tile-valor ${classeSinal(dia)}">${dia >= 0 ? '+' : '−'}${dinheiro(Math.abs(dia))}</div>
       <div class="tile-sub"><span class="${classeSinal(dia)}">${pctSinal(dia / (bolsa - dia))}</span> em ações e ETFs</div></div>` : ''}
     ${c.acoes ? `<div class="bloco"><h3>Renda anual estimada</h3><div class="tile-valor">${dinheiro(renda)}</div>
