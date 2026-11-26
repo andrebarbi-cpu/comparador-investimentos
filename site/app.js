@@ -1639,6 +1639,12 @@ function gatilhoAcao(tk, e, p) {
   if (motivos.includes('ganho não recorrente no lucro')) tese.push(`lucro de 12 meses tem ${dinheiro(e.ganho_nao_recorrente)} de ganho não recorrente: pelo recorrente o P/L é ${num(e.pl_recorrente)}, não ${num(e.pl)}`);
   if (motivos.includes('imprensa cita não recorrente')) tese.push('a imprensa cita ganho não recorrente no último resultado: confira se o lucro de 12 meses está inflado');
   if (motivos.includes('queda forte do preço')) tese.push(`caiu ${pct(-e.queda_3m, 0)} em 3 meses (Ibovespa ${pctSinal(e.queda_3m_ibov, 0)}): o mercado pode estar antecipando lucro menor`);
+  // Trimestre fora do padrão (src/calcular.js): o texto completo vem pronto na lista de alertas
+  const alertaQue = inicio => (e.alertas ?? '').split(' | ').find(a => a.startsWith(inicio));
+  const foraPadrao = [motivos.includes('trimestre fora do padrão no lucro') && alertaQue('Trimestre fora do padrão'),
+    motivos.includes('histórico de 2 anos distorcido') && alertaQue('Histórico de P/L de 2 anos distorcido')].filter(Boolean);
+  for (const a of foraPadrao) tese.push(a[0].toLowerCase() + a.slice(1));
+  const soForaPadrao = !pendente && motivos.length > 0 && motivos.every(m => m === 'dividendo extraordinário' || m === 'trimestre fora do padrão no lucro' || m === 'histórico de 2 anos distorcido');
   const conferirAntes = !!pendente || motivos.some(m => m !== 'dividendo extraordinário');
   const quebrada = tese.some(t => t.startsWith('ROE') || t.startsWith('dividendo caiu'));
   let st;
@@ -1647,6 +1653,7 @@ function gatilhoAcao(tk, e, p) {
   else if (plU >= r.mediana) st = ehTrade ? '↑ No normal: realizar metade' : 'No normal: segurar';
   else if (plU <= r.p25) st = quebrada ? 'Barata, mas com tese em dúvida: conferir antes'
     : pendente ? '↓ Em promoção, mas falta o resultado novo: conferir antes'
+    : conferirAntes && soForaPadrao ? '↓ Em promoção, mas com lucro fora do padrão: conferir antes'
     : conferirAntes ? '↓ Em promoção, mas com sinal de piora: conferir antes' : '↓ Em promoção com lucro intacto';
   else st = 'Abaixo do normal: segurar';
   return { normal: alvo(r.mediana), caro: alvo(r.p75), st, tese, ehTrade, pendente: !!pendente, conferir: conferirAntes };
@@ -3261,7 +3268,7 @@ function montarMetodo(el) {
         custódia) com um CDB de 100% do CDI, e mostra a Selic média que faria o CDB empatar. As ações são comparadas com o
         Tesouro IPCA+ de ~10 anos, cuja taxa já embute o caminho esperado dos juros.</p>
       <h3>Lucro que não se repete</h3>
-      <p>Um P/L baixo pode vir de lucro inflado por um ganho único. O site procura esses ganhos de quatro jeitos:</p>
+      <p>Um P/L baixo pode vir de lucro inflado por um ganho único. O site procura esses ganhos de cinco jeitos:</p>
       <ul>
         <li><b>Lucro acima do operacional</b> ou mais de 3 vezes a média dos 3 anos anteriores: as notas usam um lucro normalizado
           e o preço contra o histórico passa a usar o EV/EBIT.</li>
@@ -3272,6 +3279,10 @@ function montarMetodo(el) {
           Caso que motivou: Multiplan em 2026, com P/L de 8,6 no lucro contábil e cerca de 12 no recorrente.</li>
         <li><b>Imprensa citando "não recorrente"</b> no resultado de uma empresa que não está na lista: ela fica marcada para conferir.
           Por isso o site também busca as notícias de todas as ações que aparecem como oportunidade.</li>
+        <li><b>Trimestre fora do padrão</b>: lucro de um trimestre muito longe da mediana dos últimos 12, para cima ou para baixo,
+          sem ser sazonal. Dentro dos últimos 12 meses ele distorce o P/L; de 1 a 3 anos atrás, distorce a mediana de 2 anos.
+          O site só avisa (não muda nota nem oportunidade), porque o cálculo não sabe o motivo. Caso que motivou: PRIO em 2026,
+          com prejuízo no 4T25 e lucro inflado por crédito de imposto no 4T24.</li>
       </ul>
       <h3>Selos clássicos</h3>
       <ul>

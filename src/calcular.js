@@ -401,6 +401,47 @@ export function calcular(db) {
     if (lucroTriVar != null && lucroTriVar < -0.3) {
       alertas.push(`Lucro do ${rotuloTri(b.dt_refer)} foi ${br(-100 * lucroTriVar, 0)}% menor que um ano antes: os 12 meses ainda não mostram toda a piora`);
     }
+    // 6) Trimestre fora do padrão: lucro de um trimestre muito longe da mediana dos últimos 12 (ganho ou
+    //    perda que não se repete, crédito de imposto, baixa de ativo). Caso PRIO, 11/2026: prejuízo no 4T25
+    //    e lucro de R$ 6,9 bi no 4T24 (crédito fiscal) deixavam o P/L de 12 meses e a mediana de 2 anos sem
+    //    sentido, e nenhuma das proteções acima pegava (o trimestre estranho não era o último nem passava
+    //    do operacional). Dentro dos 12 meses distorce o P/L; de 1 a 3 anos atrás distorce a régua de 2 anos.
+    //    Não mexe em nota nem em oportunidade: só avisa, porque o cálculo não sabe o motivo.
+    const refsTri = [...porRef.keys()].filter(k => k <= b.dt_refer).sort().slice(-12);
+    const tris = refsTri.map(k => ({ ref: k, lucro: lucroTri(porRef.get(k)) })).filter(x => x.lucro != null);
+    let triFora12m = null, triForaHistorico = null;
+    if (tris.length >= 8) {
+      const normal = mediana(tris.map(x => x.lucro));
+      const desvioTipico = mediana(tris.map(x => Math.abs(x.lucro - normal)));
+      const limite = Math.max(3 * desvioTipico, 0.75 * Math.abs(normal));
+      const porData = new Map(tris.map(x => [x.ref, x]));
+      const mesmoTri = (ref, anos) => porData.get(`${Number(ref.slice(0, 4)) + anos}${ref.slice(4)}`);
+      const fora = tris.filter(x => {
+        const desvio = x.lucro - normal;
+        if (!(Math.abs(desvio) > limite || (normal > 0 && x.lucro < 0))) return false;
+        // Sazonal: o mesmo trimestre de outro ano foge para o mesmo lado em tamanho parecido
+        const parecido = o => o && Math.sign(o.lucro - normal) === Math.sign(desvio) && Math.abs(o.lucro - normal) > 0.5 * Math.abs(desvio);
+        return !parecido(mesmoTri(x.ref, -1)) && !parecido(mesmoTri(x.ref, 1));
+      });
+      const corte = menosAnos(b.dt_refer, 1);
+      const descreve = x => `${rotuloTri(x.ref)} com ${x.lucro < 0 ? 'prejuízo' : 'lucro'} de R$ ${br(Math.abs(x.lucro) / 1e6, 0)} mi`;
+      const normalTxt = `contra R$ ${br(normal / 1e6, 0)} mi num trimestre normal (mediana dos últimos ${tris.length})`;
+      const recentes = fora.filter(x => x.ref > corte), antigos = fora.filter(x => x.ref <= corte);
+      const efeito = recentes.reduce((s, x) => s + x.lucro - normal, 0);
+      if (recentes.length && !lucroSuspeito && !(efeitoFiscal && recentes.length === 1 && recentes[0].ref === b.dt_refer)
+        && t.lucro_contr != null && t.lucro_contr !== 0 && Math.abs(efeito) >= 0.2 * Math.abs(t.lucro_contr)) {
+        const semEles = t.lucro_contr - efeito;
+        triFora12m = true;
+        alertas.push(`Trimestre fora do padrão no lucro de 12 meses: ${recentes.map(descreve).join(' e ')}, ${normalTxt}. `
+          + (semEles > 0 ? `Trocando pelo trimestre normal, o lucro de 12 meses seria perto de R$ ${br(semEles / 1e6, 0)} mi e o P/L ${br(m.vm / semEles, 1)}${m.pl > 0 ? `, não ${br(m.pl, 1)}` : ''}` : 'O P/L de 12 meses não serve de base')
+          + ': confira no balanço se é ganho ou perda que não se repete');
+      }
+      const maiorAntigo = Math.max(0, ...antigos.map(x => Math.abs(x.lucro - normal)));
+      if (antigos.length && normal > 0 && maiorAntigo >= 2 * normal) {
+        triForaHistorico = true;
+        alertas.push(`Histórico de P/L de 2 anos distorcido: ${antigos.map(descreve).join(' e ')}, ${normalTxt}. A mediana e o "barato" e "caro" dos últimos 2 anos ficam fora do lugar`);
+      }
+    }
     // 3) Dividendo de 12 meses muito acima do normal: pagamento extraordinário que não se repete
     const dividendoExtra = m.dy != null && histDy.mediana > 0 && m.dy >= 2.5 * histDy.mediana && m.dy - histDy.mediana >= 0.05;
     if (dividendoExtra) {
@@ -471,6 +512,7 @@ export function calcular(db) {
       // Motivos para conferir antes de confiar no "barata": a página troca "lucro intacto" por "conferir"
       conferir: [resultadoPendente && 'resultado novo fora da base', lucroTriVar != null && lucroTriVar < -0.3 && 'lucro do último trimestre caiu',
         efeitoFiscal && 'efeito fiscal no lucro', ajustes.length && 'ganho não recorrente no lucro', manchete && 'imprensa cita não recorrente',
+        triFora12m && 'trimestre fora do padrão no lucro', triForaHistorico && 'histórico de 2 anos distorcido',
         dividendoExtra && 'dividendo extraordinário', quedaForte && 'queda forte do preço'].filter(Boolean).join(' | ') || null,
       queda_3m: quedaAcao, queda_3m_ibov: quedaIbov,
       elegivel: liquidez >= LIQUIDEZ_MINIMA && !desatualizado && t.lucro_contr != null ? 1 : 0,
